@@ -1,4 +1,4 @@
-# v1.8.0 最终验证报告
+# v1.9.0 最终验证报告
 
 **验证日期**：2026-11-09
 **环境**：Windows 11 x64、以太网、Realtek Gaming 2.5GbE、协商速率 1.0 Gbps、WebView2 157，以及已构建的 Tauri release 可执行文件。
@@ -21,23 +21,20 @@
 
 ## 构建与测试
 
-此前已完成并保留以下验证结果：
+本次 v1.9.0 构建验证：
 
-- `npm ci --registry=https://registry.npmjs.org`：通过。
-- `npm audit --registry=https://registry.npmjs.org --json`：high、moderate、critical 均为 0。
 - `npm run typecheck`：通过。
 - `npm run test`：32 个前端测试通过。
-- `npm run build`：Vite 生产构建通过。
 - `cargo test --locked --manifest-path src-tauri/Cargo.toml`：56 个 Rust 测试通过，3 个真实网络测试按预期 ignored。
-- `npm run icons`：执行成功；未把无关的图标二进制变化带入文档变更。
-- GitHub Actions CI run `42546866467`：通过。
+- `npm run tauri -- build --bundles nsis`：成功，生成 Windows x64 NSIS 安装包。
 
 ## 产物与发布
 
-- Tauri 配置版本为 `1.8.0`，bundle target 为 `nsis`。
+- Tauri 配置版本为 `1.9.0`，bundle target 为 `nsis`。
 - 安装模式为 `currentUser`，WebView2 为 `downloadBootstrapper`。
-- Release 安装包资产名为 `NetVision.Pro_1.8.0_x64-setup.exe`。
-- 已发布 Release：<https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.8.0>
+- Release 安装包资产名为 `NetVision.Pro_1.9.0_x64-setup.exe`。
+- SHA-256：`71728526706222fde5c70168c2d18ab5bf3149a666352ad17f003391d13511e0`。
+- Release：<https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.9.0>
 
 ## 隐私处理
 
