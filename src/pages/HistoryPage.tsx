@@ -1,10 +1,10 @@
 // 测速历史:筛选/排序/对比/趋势/导出/报告/删除
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../store/app";
 import { useTest } from "../store/test";
 import { useHistoryUi } from "../store/ui";
-import { isCancelError } from "../lib/format";
+import { isCancelError, latencyPoints } from "../lib/format";
 import { LineChart, type Series } from "../components/LineChart";
 import { HistoryHeatmap } from "../components/HistoryHeatmap";
 import { ConfirmModal, Modal } from "../components/ui";
@@ -19,13 +19,15 @@ const STATUS_CHIP: Record<string, { cls: string; text: string }> = {
 
 export function HistoryPage() {
   const toast = useApp((s) => s.toast);
-  const { result: lastResult } = useTest();
+  const lastResult = useTest((s) => s.result);
   // 筛选与选择提升到 store:切页回来不丢(见 store/ui.ts)
   const { from, to, desc, selected, setFrom, setTo, toggleDesc, setSelected, toggleSel } = useHistoryUi();
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [detail, setDetail] = useState<TestResult | null>(null);
+  // 请求序号:筛选/排序变更后,慢响应若已过期则丢弃,避免覆盖新结果
+  const loadSeq = useRef(0);
 
   const openDetail = async (id: number) => {
     try {
@@ -38,13 +40,16 @@ export function HistoryPage() {
   };
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
-      setRows(await api.historyList({ from: from || undefined, to: to || undefined, desc, limit: 500 }));
+      const list = await api.historyList({ from: from || undefined, to: to || undefined, desc, limit: 500 });
+      if (seq !== loadSeq.current) return; // 过期响应:丢弃,不覆盖新筛选结果
+      setRows(list);
     } catch (e) {
-      toast("error", `历史加载失败:${String(e)}`);
+      if (seq === loadSeq.current) toast("error", `历史加载失败:${String(e)}`);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [from, to, desc, toast]);
 
@@ -87,6 +92,9 @@ export function HistoryPage() {
     };
     return { down, up, n: asc.length };
   }, [rows]);
+
+  // series 数组引用稳定,避免 LineChart 无谓重绘
+  const trendSeries = useMemo<Series[]>(() => [trendData.down, trendData.up], [trendData]);
 
   const compareRows = rows.filter((r) => selected.includes(r.id));
 
@@ -193,7 +201,7 @@ export function HistoryPage() {
       {trendData.n >= 2 && (
         <div className="card pad mb16">
           <div className="chart-title">历史速度趋势(最近 {trendData.n} 次成功测试,悬停查看)</div>
-          <LineChart series={[trendData.down, trendData.up]} yUnit="Mbps" avgLine height={180} emptyText="暂无足够数据" />
+          <LineChart series={trendSeries} yUnit="Mbps" avgLine height={180} emptyText="暂无足够数据" />
         </div>
       )}
 
@@ -316,12 +324,19 @@ export function HistoryPage() {
 
 /** 历史详情回放:完整样本曲线 + 全部指标(数据来自测试时保存的 detail JSON) */
 function DetailModal({ detail, onClose }: { detail: TestResult; onClose: () => void }) {
-  const down: Series = { name: "下载", color: "#22d3ee", data: detail.down_samples, fill: true };
-  const up: Series = { name: "上传", color: "#a78bfa", data: detail.up_samples, fill: true };
-  const lat: Series = {
-    name: "延迟", color: "#7dd3fc",
-    data: detail.latency_samples.map((s, i) => [i * 0.35, s[1]] as [number, number]),
-  };
+  // series 引用稳定:仅当详情数据更新时重建
+  const seriesDown = useMemo<Series[]>(
+    () => [{ name: "下载", color: "#22d3ee", data: detail.down_samples, fill: true }],
+    [detail],
+  );
+  const seriesUp = useMemo<Series[]>(
+    () => [{ name: "上传", color: "#a78bfa", data: detail.up_samples, fill: true }],
+    [detail],
+  );
+  const seriesLat = useMemo<Series[]>(
+    () => [{ name: "延迟", color: "#7dd3fc", data: latencyPoints(detail.latency_samples) }],
+    [detail],
+  );
   return (
     <Modal title={`测速详情回放 · ${detail.started_at}`} onClose={onClose} width={860}>
       <div className="row gap8 wrap mb12">
@@ -341,15 +356,15 @@ function DetailModal({ detail, onClose }: { detail: TestResult; onClose: () => v
 
       <div className="card pad mb12" style={{ background: "rgba(5,8,16,.4)" }}>
         <div className="chart-title">下载速度过程</div>
-        <LineChart series={[down]} yUnit="Mbps" avgLine peakMark height={150} />
+        <LineChart series={seriesDown} yUnit="Mbps" avgLine peakMark height={150} />
       </div>
       <div className="card pad mb12" style={{ background: "rgba(5,8,16,.4)" }}>
         <div className="chart-title">上传速度过程</div>
-        <LineChart series={[up]} yUnit="Mbps" avgLine peakMark height={150} />
+        <LineChart series={seriesUp} yUnit="Mbps" avgLine peakMark height={150} />
       </div>
       <div className="card pad mb12" style={{ background: "rgba(5,8,16,.4)" }}>
         <div className="chart-title">延迟时间线</div>
-        <LineChart series={[lat]} yUnit="ms" height={150} emptyText="无延迟样本" />
+        <LineChart series={seriesLat} yUnit="ms" height={150} emptyText="无延迟样本" />
       </div>
 
       {detail.quality && (

@@ -1,6 +1,8 @@
 // 网络质量分析页:可解释评级 + 负载延迟对比 + 抖动/丢包详情
+import { useMemo } from "react";
 import { useApp } from "../store/app";
 import { useTest } from "../store/test";
+import { latencyPoints } from "../lib/format";
 import { stabilityText, stabilityTone } from "../lib/quality";
 import { LineChart, type Series } from "../components/LineChart";
 import { RadarChart, type RadarMetric } from "../components/RadarChart";
@@ -29,7 +31,21 @@ function Metric(props: { label: string; value: string; unit?: string; hint?: str
 
 export function QualityPage() {
   const setPage = useApp((s) => s.setPage);
-  const { result } = useTest();
+  const result = useTest((s) => s.result);
+
+  // series 引用稳定:仅当结果更新时重建,避免 LineChart 重绘(hooks 须在条件返回前调用)
+  const latencySeries = useMemo<Series[]>(
+    () => (result ? [{ name: "延迟", color: "#7dd3fc", data: latencyPoints(result.latency_samples), fill: true }] : []),
+    [result],
+  );
+  const downSeries = useMemo<Series[]>(
+    () => (result ? [{ name: "下载速度", color: "#22d3ee", data: result.down_samples, fill: true }] : []),
+    [result],
+  );
+  const upSeries = useMemo<Series[]>(
+    () => (result ? [{ name: "上传速度", color: "#a78bfa", data: result.up_samples, fill: true }] : []),
+    [result],
+  );
 
   if (!result || result.status === "failed") {
     return (
@@ -52,12 +68,6 @@ export function QualityPage() {
   const idle = result.idle_ping_ms;
   const dlRatio = result.loaded_down_ms && idle > 0 ? result.loaded_down_ms / idle : null;
   const ulRatio = result.loaded_up_ms && idle > 0 ? result.loaded_up_ms / idle : null;
-
-  const latencySeries: Series[] = [
-    { name: "延迟", color: "#7dd3fc", data: result.latency_samples.map((s, i) => [i * 0.35, s[1]] as [number, number]), fill: true },
-  ];
-  const downSeries: Series[] = [{ name: "下载速度", color: "#22d3ee", data: result.down_samples, fill: true }];
-  const upSeries: Series[] = [{ name: "上传速度", color: "#a78bfa", data: result.up_samples, fill: true }];
 
   const bars = [
     { label: "空闲", v: idle, color: "var(--ice)" },

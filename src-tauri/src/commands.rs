@@ -304,7 +304,12 @@ pub async fn history_list(
     desc: Option<bool>,
     limit: Option<u32>,
 ) -> Result<Vec<HistoryRow>, String> {
-    state.storage.list_history(from, to, desc.unwrap_or(true), limit.unwrap_or(500))
+    let storage = state.storage.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        storage.list_history(from, to, desc.unwrap_or(true), limit.unwrap_or(500))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -312,17 +317,26 @@ pub async fn history_detail(
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<Option<TestResult>, String> {
-    state.storage.get_result_detail(id)
+    let storage = state.storage.clone();
+    tauri::async_runtime::spawn_blocking(move || storage.get_result_detail(id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn history_delete(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
-    state.storage.delete_history(id)
+    let storage = state.storage.clone();
+    tauri::async_runtime::spawn_blocking(move || storage.delete_history(id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn history_clear(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.storage.clear_history()
+    let storage = state.storage.clone();
+    tauri::async_runtime::spawn_blocking(move || storage.clear_history())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 打开系统保存对话框并写出 CSV / JSON
@@ -332,7 +346,12 @@ pub async fn history_export(
     state: tauri::State<'_, AppState>,
     format: String,
 ) -> Result<String, String> {
-    let rows = state.storage.list_history(None, None, true, 5000)?;
+    let storage = state.storage.clone();
+    let rows = tauri::async_runtime::spawn_blocking(move || {
+        storage.list_history(None, None, true, 5000)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     if rows.is_empty() {
         return Err("没有可导出的历史记录".into());
     }
@@ -360,9 +379,10 @@ pub async fn history_export_report(
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<String, String> {
-    let detail = state
-        .storage
-        .get_result_detail(id)?
+    let storage = state.storage.clone();
+    let detail = tauri::async_runtime::spawn_blocking(move || storage.get_result_detail(id))
+        .await
+        .map_err(|e| e.to_string())??
         .ok_or_else(|| "记录不存在".to_string())?;
     let html = crate::report::render_html_report(&detail);
     let default_name = format!("NetVision_Report_{}.html", detail.id);

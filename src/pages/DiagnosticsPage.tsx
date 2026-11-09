@@ -3,6 +3,7 @@ import React, { useEffect } from "react";
 import { api } from "../api";
 import { useApp } from "../store/app";
 import { useDiag } from "../store/diag";
+import { useDiagTask } from "../lib/useDiagTask";
 import { Icon, type IconName } from "../components/Icon";
 import type { IfaceInfo, WifiDetails } from "../types";
 
@@ -90,67 +91,27 @@ export function DiagnosticsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const runDns = async () => {
-    setDnsRun(true);
-    try { setDns(await api.diagDns()); } catch (e) { toast("error", String(e)); } finally { setDnsRun(false); }
-  };
-  const runGw = async () => {
-    setGwRun(true);
-    try { setGw(await api.diagGateway()); } catch (e) { toast("error", String(e)); } finally { setGwRun(false); }
-  };
-  const runTcp = async () => {
-    setTcpRun(true);
-    try { setTcp(await api.diagTcp()); } catch (e) { toast("error", String(e)); } finally { setTcpRun(false); }
-  };
-  const runHttps = async () => {
-    setHttpsRun(true);
-    try { setHttps(await api.diagHttps()); } catch (e) { toast("error", String(e)); } finally { setHttpsRun(false); }
-  };
-  const runV6 = async () => {
-    setV6Run(true);
-    try { setV6(await api.diagIpv6()); } catch (e) { toast("error", String(e)); } finally { setV6Run(false); }
-  };
-  const runRoute = async () => {
-    setRouteRun(true);
-    setRoute(null);
-    try { setRoute(await api.diagRouteQuality(routeHost.trim(), 12, 6)); }
-    catch (e) { toast("error", String(e)); }
-    finally { setRouteRun(false); }
-  };
-  const runDnsCons = async () => {
-    setDnsConsRun(true);
-    setDnsCons(null);
-    try { setDnsCons(await api.diagDnsConsistency(dnsDomain.trim())); }
-    catch (e) { toast("error", String(e)); }
-    finally { setDnsConsRun(false); }
-  };
-  const runNat = async () => {
-    setNatRun(true);
-    setNat(null);
-    try { setNat(await api.diagNatType()); }
-    catch (e) { toast("error", String(e)); }
-    finally { setNatRun(false); }
-  };
-  const runGrid = async () => {
-    setGridRun(true);
-    setGrid(null);
-    try { setGrid(await api.diagConnectivityGrid()); }
-    catch (e) { toast("error", String(e)); }
-    finally { setGridRun(false); }
-  };
-  const runTrace = async () => {
-    setTraceRun(true);
-    setTrace(null);
-    try { setTrace(await api.diagTraceroute(traceHost.trim(), 15)); }
-    catch (e) { toast("error", String(e)); }
-    finally { setTraceRun(false); }
-  };
-  const runPing = async () => {
-    setPingRun(true);
-    try { setPing(await api.diagPing(pingHost.trim(), 8)); }
-    catch (e) { toast("error", String(e)); }
-    finally { setPingRun(false); }
-  };
+  // 各检测项一行接入:run/running 由 useDiagTask 统一管理,行为与原逐项实现一致
+  const dnsTask = useDiagTask({ running: dnsRun, setRunning: setDnsRun, setResult: setDns, exec: () => api.diagDns() });
+  const gwTask = useDiagTask({ running: gwRun, setRunning: setGwRun, setResult: setGw, exec: () => api.diagGateway() });
+  const tcpTask = useDiagTask({ running: tcpRun, setRunning: setTcpRun, setResult: setTcp, exec: () => api.diagTcp() });
+  const httpsTask = useDiagTask({ running: httpsRun, setRunning: setHttpsRun, setResult: setHttps, exec: () => api.diagHttps() });
+  const v6Task = useDiagTask({ running: v6Run, setRunning: setV6Run, setResult: setV6, exec: () => api.diagIpv6() });
+  const routeTask = useDiagTask({
+    running: routeRun, setRunning: setRouteRun, setResult: setRoute, clearFirst: true,
+    exec: () => api.diagRouteQuality(routeHost.trim(), 12, 6),
+  });
+  const dnsConsTask = useDiagTask({
+    running: dnsConsRun, setRunning: setDnsConsRun, setResult: setDnsCons, clearFirst: true,
+    exec: () => api.diagDnsConsistency(dnsDomain.trim()),
+  });
+  const natTask = useDiagTask({ running: natRun, setRunning: setNatRun, setResult: setNat, clearFirst: true, exec: () => api.diagNatType() });
+  const gridTask = useDiagTask({ running: gridRun, setRunning: setGridRun, setResult: setGrid, clearFirst: true, exec: () => api.diagConnectivityGrid() });
+  const traceTask = useDiagTask({
+    running: traceRun, setRunning: setTraceRun, setResult: setTrace, clearFirst: true,
+    exec: () => api.diagTraceroute(traceHost.trim(), 15),
+  });
+  const pingTask = useDiagTask({ running: pingRun, setRunning: setPingRun, setResult: setPing, clearFirst: true, exec: () => api.diagPing(pingHost.trim(), 8) });
 
   const defaultIface = local?.interfaces.find((i) => i.is_default);
 
@@ -210,7 +171,7 @@ export function DiagnosticsPage() {
 
       {/* 诊断操作 */}
       <div className="diag-actions mt16">
-        <ActionCard icon="layers" title="DNS 解析检测" desc="系统解析常见域名 + 对每个配置的 DNS 服务器直接 UDP 查询" running={dnsRun} onRun={runDns} status={dns ? (dns.domains.every((d) => d.ok) ? "ok" : dns.domains.some((d) => d.ok) ? "warn" : "err") : undefined}>
+        <ActionCard icon="layers" title="DNS 解析检测" desc="系统解析常见域名 + 对每个配置的 DNS 服务器直接 UDP 查询" running={dnsTask.running} onRun={dnsTask.run} status={dns ? (dns.domains.every((d) => d.ok) ? "ok" : dns.domains.some((d) => d.ok) ? "warn" : "err") : undefined}>
           {dns && (
             <>
               {dns.domains.filter((d) => d.domain !== "__hint__").map((d) => (
@@ -226,7 +187,7 @@ export function DiagnosticsPage() {
           )}
         </ActionCard>
 
-        <ActionCard icon="wifi" title="默认网关连通性" desc="对默认网关执行 ICMP 检测(真实丢包与延迟)" running={gwRun} onRun={runGw} status={gw ? (gw.reachable ? "ok" : gw.loss_percent == null ? "unknown" : "err") : undefined}>
+        <ActionCard icon="wifi" title="默认网关连通性" desc="对默认网关执行 ICMP 检测(真实丢包与延迟)" running={gwTask.running} onRun={gwTask.run} status={gw ? (gw.reachable ? "ok" : gw.loss_percent == null ? "unknown" : "err") : undefined}>
           {gw && (
             <>
               <ResultRow label="网关地址" value={gw.gateway ?? "未找到"} />
@@ -237,25 +198,25 @@ export function DiagnosticsPage() {
           )}
         </ActionCard>
 
-        <ActionCard icon="zap" title="TCP 连接检测" desc="对常用服务端口发起真实 TCP 连接并计时" running={tcpRun} onRun={runTcp} status={tcp ? (tcp.every((r) => r.ok) ? "ok" : tcp.some((r) => r.ok) ? "warn" : "err") : undefined}>
+        <ActionCard icon="zap" title="TCP 连接检测" desc="对常用服务端口发起真实 TCP 连接并计时" running={tcpTask.running} onRun={tcpTask.run} status={tcp ? (tcp.every((r) => r.ok) ? "ok" : tcp.some((r) => r.ok) ? "warn" : "err") : undefined}>
           {tcp?.map((r) => (
             <ResultRow key={`${r.target}:${r.port}`} label={`${r.target}:${r.port}`} s={r.ok ? "ok" : "err"} value={r.ok ? `${r.ms?.toFixed(1)} ms` : (r.error ?? "失败")} />
           ))}
         </ActionCard>
 
-        <ActionCard icon="shield" title="HTTPS 连接检测" desc="真实 TLS 请求验证 HTTPS 可达性与响应时间" running={httpsRun} onRun={runHttps} status={https ? (https.every((r) => r.ok) ? "ok" : https.some((r) => r.ok) ? "warn" : "err") : undefined}>
+        <ActionCard icon="shield" title="HTTPS 连接检测" desc="真实 TLS 请求验证 HTTPS 可达性与响应时间" running={httpsTask.running} onRun={httpsTask.run} status={https ? (https.every((r) => r.ok) ? "ok" : https.some((r) => r.ok) ? "warn" : "err") : undefined}>
           {https?.map((r) => (
             <ResultRow key={r.url} label={r.url.replace("https://", "").slice(0, 34)} s={r.ok ? "ok" : "err"} value={r.ok ? `HTTP ${r.status} · ${r.ms?.toFixed(0)} ms` : (r.error ?? "失败")} />
           ))}
         </ActionCard>
 
-        <ActionCard icon="globe" title="IPv6 可用性" desc="尝试通过纯 IPv6 端点建立连接" running={v6Run} onRun={runV6} status={v6 ? (v6.available ? "ok" : "err") : undefined}>
+        <ActionCard icon="globe" title="IPv6 可用性" desc="尝试通过纯 IPv6 端点建立连接" running={v6Task.running} onRun={v6Task.run} status={v6 ? (v6.available ? "ok" : "err") : undefined}>
           {v6 && (
             <ResultRow label="IPv6 连接" s={v6.available ? "ok" : "err"} value={v6.available ? (v6.public_address ? `可用 · ${v6.public_address}` : "可用") : (v6.error ?? "不可用")} />
           )}
         </ActionCard>
 
-        <ActionCard icon="trending" title="路由质量分析(MTR 式)" desc="tracert 获取路径后对每跳真实 ICMP 探测,定位劣化在接入段还是骨干段" running={routeRun} onRun={runRoute}>
+        <ActionCard icon="trending" title="路由质量分析(MTR 式)" desc="tracert 获取路径后对每跳真实 ICMP 探测,定位劣化在接入段还是骨干段" running={routeTask.running} onRun={routeTask.run}>
           <div className="row mb8">
             <input className="text-input grow" value={routeHost} onChange={(e) => setRouteHost(e.target.value)} placeholder="目标主机" />
           </div>
@@ -281,7 +242,7 @@ export function DiagnosticsPage() {
           {route && route.hops.length === 0 && <div className="faint mt8" style={{ fontSize: 11.5 }}>未能解析出路由跳点。</div>}
         </ActionCard>
 
-        <ActionCard icon="search" title="DNS 一致性 / 劫持检测" desc="系统 DNS 与多家公共 DNS 交叉验证,识别劫持、污染或运营商改写" running={dnsConsRun} onRun={runDnsCons}>
+        <ActionCard icon="search" title="DNS 一致性 / 劫持检测" desc="系统 DNS 与多家公共 DNS 交叉验证,识别劫持、污染或运营商改写" running={dnsConsTask.running} onRun={dnsConsTask.run}>
           <div className="row mb8">
             <input className="text-input grow" value={dnsDomain} onChange={(e) => setDnsDomain(e.target.value)} placeholder="要检测的域名" />
           </div>
@@ -303,7 +264,7 @@ export function DiagnosticsPage() {
           )}
         </ActionCard>
 
-        <ActionCard icon="wifi" title="NAT 类型检测(STUN)" desc="RFC 5389 标准探测,判定公网直连/锥形/对称 NAT(简化判定)" running={natRun} onRun={runNat} status={nat ? (nat.servers.some((s) => s.ok) ? "ok" : "unknown") : undefined}>
+        <ActionCard icon="wifi" title="NAT 类型检测(STUN)" desc="RFC 5389 标准探测,判定公网直连/锥形/对称 NAT(简化判定)" running={natTask.running} onRun={natTask.run} status={nat ? (nat.servers.some((s) => s.ok) ? "ok" : "unknown") : undefined}>
           {nat && (
             <>
               <ResultRow label="NAT 类型" s={nat.nat_type === "公网直连" ? "ok" : nat.nat_type === "锥形 NAT" ? "ok" : nat.nat_type === "对称 NAT" ? "warn" : "unknown"} value={nat.nat_type} />
@@ -316,7 +277,7 @@ export function DiagnosticsPage() {
           )}
         </ActionCard>
 
-        <ActionCard icon="globe" title="服务连通性矩阵" desc="并发探测常用服务 TCP 443(无法连接可能为本地网络策略,不代表服务不可用)" running={gridRun} onRun={runGrid}
+        <ActionCard icon="globe" title="服务连通性矩阵" desc="并发探测常用服务 TCP 443(无法连接可能为本地网络策略,不代表服务不可用)" running={gridTask.running} onRun={gridTask.run}
                     status={grid ? (grid.every((r) => r.ok) ? "ok" : grid.some((r) => r.ok) ? "warn" : "err") : undefined}>
           {grid && (
             <div className="connect-grid">
@@ -330,7 +291,7 @@ export function DiagnosticsPage() {
           )}
         </ActionCard>
 
-        <ActionCard icon="search" title="自定义 ICMP Ping" desc="对任意主机执行真实 ICMP 检测(8 个数据包)" running={pingRun} onRun={runPing}>
+        <ActionCard icon="search" title="自定义 ICMP Ping" desc="对任意主机执行真实 ICMP 检测(8 个数据包)" running={pingTask.running} onRun={pingTask.run}>
           <div className="row mb8">
             <input className="text-input grow" value={pingHost} onChange={(e) => setPingHost(e.target.value)} placeholder="主机名或 IP" />
           </div>
@@ -351,9 +312,9 @@ export function DiagnosticsPage() {
         <div className="row">
           <div className="chart-title grow" style={{ margin: 0 }}><Icon name="trending" size={15} /> 路由追踪 (tracert)</div>
           <input className="text-input" style={{ width: 240 }} value={traceHost} onChange={(e) => setTraceHost(e.target.value)} placeholder="目标主机" />
-          <button className="btn sm" onClick={runTrace} disabled={traceRun}>
-            {traceRun ? <Icon name="refresh" size={13} className="spin" /> : <Icon name="play" size={13} />}
-            {traceRun ? "追踪中(最长约 1 分钟)" : "开始追踪"}
+          <button className="btn sm" onClick={traceTask.run} disabled={traceTask.running}>
+            {traceTask.running ? <Icon name="refresh" size={13} className="spin" /> : <Icon name="play" size={13} />}
+            {traceTask.running ? "追踪中(最长约 1 分钟)" : "开始追踪"}
           </button>
         </div>
         {trace && trace.length > 0 && (

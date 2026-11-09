@@ -20,7 +20,11 @@ const PHASE_TEXT: Record<string, string> = {
 export function StatusBar() {
   const net = useApp((s) => s.net);
   const settings = useApp((s) => s.settings);
-  const { phase, running, result, node } = useTest();
+  // 逐字段订阅:仅本栏用到的测速字段变化时重渲染
+  const phase = useTest((s) => s.phase);
+  const running = useTest((s) => s.running);
+  const result = useTest((s) => s.result);
+  const node = useTest((s) => s.node);
   const [tick, setTick] = React.useState<MonitorTick | null>(null);
 
   React.useEffect(() => {

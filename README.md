@@ -78,7 +78,9 @@ npm install
 npm run icons        # 生成应用图标(仅首次)
 npm run tauri dev    # 开发运行
 npm run tauri build  # 构建 NSIS 安装包(src-tauri/target/release/bundle/nsis/)
-cargo test           # 后端单元测试(src-tauri 下执行)
+npm run test         # 前端单元测试(vitest)
+cargo test           # 后端单元测试(src-tauri 下执行);真实网络用例已标 #[ignore],
+                     # 需显式运行:cargo test -- --ignored
 ```
 
 ## CLI 模式(v1.1.0+)

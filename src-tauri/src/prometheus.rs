@@ -128,8 +128,21 @@ impl PrometheusHandle {
                             ).await;
                             let req = String::from_utf8_lossy(&buf);
                             let body = if req.starts_with("GET /metrics") {
-                                let latest = storage.list_history(None, None, true, 1).ok().and_then(|v| v.first().cloned());
-                                let total = storage.history_count().unwrap_or(0) as u64;
+                                // 查询放阻塞线程池:抓取路径不占用 tokio 工作线程
+                                let (latest, total) = {
+                                    let storage = storage.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        let latest = storage
+                                            .list_history(None, None, true, 1)
+                                            .ok()
+                                            .and_then(|v| v.first().cloned());
+                                        let total =
+                                            storage.history_count().unwrap_or(0) as u64;
+                                        (latest, total)
+                                    })
+                                    .await
+                                    .unwrap_or((None, 0))
+                                };
                                 build_metrics_text(latest.as_ref(), total, connected())
                             } else {
                                 String::new()

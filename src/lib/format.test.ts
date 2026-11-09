@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtBytes, fmtBytesPerSec, fmtSpeedMbps, isCancelError } from "./format";
+import { fmtBytes, fmtBytesPerSec, fmtSpeedMbps, isCancelError, latencyPoints } from "./format";
 
 describe("fmtBytesPerSec", () => {
   it("0 / 负数 / 非有限值统一显示 0 B/s", () => {
@@ -64,5 +64,19 @@ describe("isCancelError", () => {
   it("普通错误不算取消", () => {
     expect(isCancelError(new Error("磁盘已满"))).toBe(false);
     expect(isCancelError(undefined)).toBe(false);
+  });
+});
+
+describe("latencyPoints", () => {
+  it("x 轴口径 = 样本序号 × 0.35s,与原内联实现数值完全一致", () => {
+    expect(latencyPoints([[1000, 12.5], [1001, 13], [1002, 14.25]])).toEqual([
+      [0, 12.5],
+      [0.35, 13],
+      [0.7, 14.25],
+    ]);
+  });
+
+  it("空样本返回空数组", () => {
+    expect(latencyPoints([])).toEqual([]);
   });
 });

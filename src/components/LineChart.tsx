@@ -1,5 +1,5 @@
 // 专业实时曲线图:Canvas 渲染,渐变填充,均值线,峰值标记,悬停十字线 + 数值提示
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 export interface Series {
   name: string;
@@ -51,8 +51,8 @@ export function LineChart(props: {
     return () => ro.disconnect();
   }, [height]);
 
-  // 绘制
-  useEffect(() => {
+  // 绘制(依赖变化时重建引用,由下方合帧调度统一触发)
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
@@ -237,6 +237,35 @@ export function LineChart(props: {
       ctx.restore();
     }
   }, [series, size, hover, windowSecs, avgLine, peakMark, anomalyThreshold, yUnit, emptyText]);
+
+  // 合帧:置脏并只调度一次 rAF,同一帧内的多次绘制请求(draw 引用已是最新)合并为一次重绘
+  const drawRef = useRef(draw);
+  const rafRef = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    drawRef.current = draw;
+    dirtyRef.current = true;
+    if (rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        if (dirtyRef.current) {
+          dirtyRef.current = false;
+          drawRef.current();
+        }
+      });
+    }
+  }, [draw]);
+
+  // 卸载时取消挂起的重绘
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    },
+    [],
+  );
 
   // 悬停取值
   const onMove = (e: React.MouseEvent) => {

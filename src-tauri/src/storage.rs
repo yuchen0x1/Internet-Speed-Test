@@ -35,6 +35,18 @@ pub struct Storage {
     conn: Arc<Mutex<Connection>>,
 }
 
+/// 在阻塞线程池写入历史:async 调用方(引擎收尾)不占用 tokio 工作线程
+pub async fn insert_result_blocking(
+    storage: &Arc<Storage>,
+    r: &TestResult,
+) -> Result<(), String> {
+    let s = Arc::clone(storage);
+    let r = r.clone();
+    tokio::task::spawn_blocking(move || s.insert_result(&r))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 fn sanitize_legacy_ndt7_details(conn: &Connection) -> Result<usize, String> {
     let mut stmt = conn
         .prepare(

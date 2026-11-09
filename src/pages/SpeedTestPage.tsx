@@ -1,8 +1,9 @@
 // 网络测速主页:仪表盘 + 三大指标卡 + 实时曲线 + 阶段时间线 + 控制区
 import React, { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { useApp } from "../store/app";
-import { fmtSpeedMbps } from "../lib/format";
+import { fmtSpeedMbps, latencyPoints } from "../lib/format";
 import { useMotionEnabled } from "../lib/motion";
 import { useTest } from "../store/test";
 import { Gauge } from "../components/Gauge";
@@ -23,7 +24,27 @@ const STEPS: { key: string; label: string }[] = [
 export function SpeedTestPage() {
   const toast = useApp((s) => s.toast);
   const settings = useApp((s) => s.settings);
-  const t = useTest();
+  // 只订阅本页用到的字段(progress/bound 等无关字段变化不触发重渲染;shallow 避免对象选择器的引用抖动)
+  const t = useTest(
+    useShallow((s) => ({
+      phase: s.phase,
+      message: s.message,
+      running: s.running,
+      elapsedMs: s.elapsedMs,
+      node: s.node,
+      liveDown: s.liveDown,
+      liveUp: s.liveUp,
+      downSamples: s.downSamples,
+      upSamples: s.upSamples,
+      latencySamples: s.latencySamples,
+      loadedDown: s.loadedDown,
+      loadedUp: s.loadedUp,
+      downloadedMb: s.downloadedMb,
+      uploadedMb: s.uploadedMb,
+      result: s.result,
+      error: s.error,
+    })),
+  );
   const [motionTick, setMotionTick] = useState(0);
   const [openingService, setOpeningService] = useState<string | null>(null);
   const motionOn = useMotionEnabled();
@@ -117,15 +138,19 @@ export function SpeedTestPage() {
   const stepIdx = STEPS.findIndex((s) => s.key === t.phase);
   const dl = fmtSpeedMbps(t.result?.download_mbps ?? t.liveDown);
   const ul = fmtSpeedMbps(t.result?.upload_mbps ?? t.liveUp);
-  const downSeries: Series[] = [
-    { name: "下载速度", color: "#22d3ee", data: t.downSamples, fill: true },
-  ];
-  const upSeries: Series[] = [
-    { name: "上传速度", color: "#a78bfa", data: t.upSamples, fill: true },
-  ];
-  const latSeries: Series[] = [
-    { name: "延迟", color: "#7dd3fc", data: t.latencySamples.map((s, i) => [i * 0.35, s[1]] as [number, number]) },
-  ];
+  // series 引用稳定:仅当对应样本数组更新时重建,避免 LineChart 无谓重绘
+  const downSeries = useMemo<Series[]>(
+    () => [{ name: "下载速度", color: "#22d3ee", data: t.downSamples, fill: true }],
+    [t.downSamples],
+  );
+  const upSeries = useMemo<Series[]>(
+    () => [{ name: "上传速度", color: "#a78bfa", data: t.upSamples, fill: true }],
+    [t.upSamples],
+  );
+  const latSeries = useMemo<Series[]>(
+    () => [{ name: "延迟", color: "#7dd3fc", data: latencyPoints(t.latencySamples) }],
+    [t.latencySamples],
+  );
   const latAnomaly = useMemo(() => {
     if (t.latencySamples.length < 4) return undefined;
     const sorted = [...t.latencySamples.map((s) => s[1])].sort((a, b) => a - b);

@@ -17,7 +17,11 @@ import { MonitorPage } from "./pages/MonitorPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
-  const { booted, page, boot, settings } = useApp();
+  // 逐字段订阅:toast/网络状态等变化不再触发 App 及整棵页面树重渲染
+  const booted = useApp((s) => s.booted);
+  const page = useApp((s) => s.page);
+  const boot = useApp((s) => s.boot);
+  const settings = useApp((s) => s.settings);
   const bindTest = useTest((s) => s.bind);
   const [splash, setSplash] = useState(true);
 

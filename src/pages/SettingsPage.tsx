@@ -9,12 +9,16 @@ import { Icon } from "../components/Icon";
 
 export function SettingsPage() {
   const toast = useApp((s) => s.toast);
-  const { settings, updateSettings, appInfo } = useApp();
-  const servers = useServers();
+  // 逐字段订阅:toast/网络状态等无关变化不触发整页重渲染
+  const settings = useApp((s) => s.settings);
+  const updateSettings = useApp((s) => s.updateSettings);
+  const appInfo = useApp((s) => s.appInfo);
+  const nodes = useServers((s) => s.nodes);
+  const loadServers = useServers((s) => s.load);
   const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
-    servers.load();
+    loadServers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -117,7 +121,7 @@ export function SettingsPage() {
                 value={settings.default_node_url}
                 onChange={(e) => upd({ default_node_url: e.target.value })}
               >
-                {servers.nodes.map((n) => (
+                {nodes.map((n) => (
                   <option key={n.id} value={n.base_url}>{n.name}</option>
                 ))}
               </select>

@@ -14,7 +14,9 @@ const NAV: { id: PageId; label: string; icon: IconName }[] = [
 ];
 
 export function Sidebar() {
-  const { page, setPage, appInfo } = useApp();
+  const page = useApp((s) => s.page);
+  const setPage = useApp((s) => s.setPage);
+  const appInfo = useApp((s) => s.appInfo);
   return (
     <nav className="sidebar">
       {NAV.map((n) => (

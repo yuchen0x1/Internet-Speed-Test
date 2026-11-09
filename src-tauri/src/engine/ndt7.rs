@@ -370,7 +370,7 @@ impl ProviderAdapter for Ndt7Adapter {
                         let end = (off + WS_CHUNK_BYTES).min(pool.len());
                         let chunk = pool[off..end].to_vec();
                         off = if end >= pool.len() { 0 } else { end };
-                        match ws.send(Message::Binary(chunk.clone())).await {
+                        match ws.send(Message::Binary(chunk.clone().into())).await {
                             Ok(()) => counters.add_bytes(chunk.len() as u64),
                             Err(_) => break, // 传输错误不归入 HTTP 请求失败。
                         }

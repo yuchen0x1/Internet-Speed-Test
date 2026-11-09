@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Locate v2 响应解析与节点构造 | 单测覆盖 `{results:[...]}`、裸数组、缺字段跳过、WSS 优先、WS 明文标记、令牌保留于运行时、子协议及 URL 转换 | ✅ |
 | NDT7 节点发现 | Locate 返回的最多 4 个候选逐一限时握手，选择可连接且握手耗时最低者 | ✅ |
-| 真实 WebSocket 下载/上传 | `cargo test ndt7::tests::test_ndt7_real_network -- --nocapture`；下载 3 秒/3 流、上传 3 秒/2 流 | ✅ 多次真实网络运行均收到有效下载/上传数据；最近复测下载 120,389,632 字节(321.0 Mbps)，握手 RTT 811.9 ms(另一轮 7,274,496 字节/19.4 Mbps、337.5 ms)。单次数据随网络和服务端变化 |
+| 真实 WebSocket 下载/上传 | `cargo test ndt7::tests::test_ndt7_real_network -- --ignored -- --nocapture`（真实网络用例已标 `#[ignore]`，需 `-- --ignored` 显式运行）；下载 3 秒/3 流、上传 3 秒/2 流 | ✅ 多次真实网络运行均收到有效下载/上传数据；最近复测下载 120,389,632 字节(321.0 Mbps)，握手 RTT 811.9 ms(另一轮 7,274,496 字节/19.4 Mbps、337.5 ms)。单次数据随网络和服务端变化 |
 | 测量口径 | 下载只计二进制数据帧；NDT7 JSON telemetry 控制报文不计吞吐；服务端主动关闭后重连不记作失败；NDT7 握手/发送错误不计入 HTTP 失败数 | ✅ |
 | 令牌边界 | `ServerNodeInfo` 序列化测试 + 旧历史 detail 迁移测试；IPC/事件/CLI JSON/新历史 detail 不序列化 NDT7 端点 URL；启动时清理旧 detail 并安全删除/检查点 | ✅ |
 | 前端/后端验证 | `cargo check`、完整 `cargo test`、`npm run typecheck`、`npm run build` | ✅ Rust 54/54；TypeScript 与 Vite 生产构建通过 |

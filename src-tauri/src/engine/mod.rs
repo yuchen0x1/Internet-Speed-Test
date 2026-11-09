@@ -237,7 +237,7 @@ impl SpeedTestEngine {
                 self.set_phase(sink, TestPhase::Finished, "测速完成");
                 sink.emit(EngineEvent::Finished { result: result.clone() });
                 if settings.autosave_history {
-                    if let Err(e) = storage.insert_result(&result) {
+                    if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
                         log::warn!("历史记录写入失败: {e}");
                     }
                 }
@@ -251,7 +251,9 @@ impl SpeedTestEngine {
                 sink.emit(EngineEvent::Cancelled);
                 sink.emit(EngineEvent::Finished { result: result.clone() });
                 if settings.autosave_history {
-                    let _ = storage.insert_result(&result);
+                    if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
+                        log::warn!("历史记录写入失败: {e}");
+                    }
                 }
             }
             Err(err) => {
@@ -262,7 +264,9 @@ impl SpeedTestEngine {
                 result.duration_ms = t0.elapsed().as_millis() as u64;
                 sink.emit(EngineEvent::Failed { error: err });
                 if settings.autosave_history {
-                    let _ = storage.insert_result(&result);
+                    if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
+                        log::warn!("历史记录写入失败: {e}");
+                    }
                 }
             }
         }

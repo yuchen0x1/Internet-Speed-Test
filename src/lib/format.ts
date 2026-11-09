@@ -38,3 +38,11 @@ export function fmtBytes(bytes: number): string {
 export function isCancelError(e: unknown): boolean {
   return String(e).includes("取消");
 }
+
+/**
+ * 延迟曲线 x 轴口径(秒):样本序号 × 0.35 —— 测速页 / 质量页 / 历史详情回放三处共用,
+ * 数值与原各自内联实现完全一致(样本上限 1200 条后序号不再增长,x 轴自然冻结)。
+ */
+export function latencyPoints(samples: [number, number][]): [number, number][] {
+  return samples.map((s, i) => [i * 0.35, s[1]] as [number, number]);
+}
