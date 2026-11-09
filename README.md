@@ -38,7 +38,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 - **系统**：Windows 10/11 x64
 - **依赖**：WebView2（Windows 10/11 通常已自带）
-- **安装方式**：下载 Release 中的 `NetVision Pro_1.8.0_x64-setup.exe`，双击安装即可。默认按当前用户安装，不需要管理员权限。
+- **安装方式**：下载 Release 中的 `NetVision.Pro_1.8.0_x64-setup.exe`，双击安装即可。默认按当前用户安装，不需要管理员权限。
 
 安装包由 Tauri NSIS 生成，最新版本可在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 页面获取。
 
