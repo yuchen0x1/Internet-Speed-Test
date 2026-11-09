@@ -10,6 +10,7 @@ import type {
   ConnectivityEntry,
   DnsConsistencyReport,
   DnsTestReport,
+  ExportOutcome,
   GatewayReport,
   HistoryRow,
   HttpsResult,
@@ -28,12 +29,31 @@ import type {
   WifiDetails,
 } from "./types";
 
+/** 携带错误码的调用错误(诊断命令的 CommandError 经 IPC 透传 code) */
+export class AppInvokeError extends Error {
+  readonly code: string;
+  constructor(message: string, code = "failed") {
+    super(message);
+    this.name = "AppInvokeError";
+    this.code = code;
+  }
+}
+
+/** 展示用错误文案:AppInvokeError 取 message,其余走 String() */
+export const errMsg = (e: unknown): string =>
+  e instanceof AppInvokeError ? e.message : String(e);
+
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await tauriInvoke<T>(cmd, args);
   } catch (e) {
-    const msg = typeof e === "string" ? e : JSON.stringify(e);
-    throw new Error(msg);
+    // 诊断命令返回 { code, message } 结构化错误,保留 code 供分支判断;
+    // 字符串/普通 Error 统一包装为 failed 码,全部调用方拿到同一错误类型
+    if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
+      const ce = e as { code?: unknown; message: string };
+      throw new AppInvokeError(ce.message, typeof ce.code === "string" ? ce.code : "failed");
+    }
+    throw new AppInvokeError(typeof e === "string" ? e : JSON.stringify(e));
   }
 }
 
@@ -68,7 +88,8 @@ export const api = {
   historyDetail: (id: number) => invoke<TestResult | null>("history_detail", { id }),
   historyDelete: (id: number) => invoke<void>("history_delete", { id }),
   historyClear: () => invoke<void>("history_clear"),
-  historyExport: (format: "csv" | "json") => invoke<string>("history_export", { format }),
+  historyExport: (format: "csv" | "json") =>
+    invoke<ExportOutcome>("history_export", { format }),
   historyExportReport: (id: number) => invoke<string>("history_export_report", { id }),
 
   monitorSetEnabled: (enabled: boolean) => invoke<void>("monitor_set_enabled", { enabled }),

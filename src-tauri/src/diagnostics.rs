@@ -404,8 +404,10 @@ pub async fn traceroute(host: &str, max_hops: u32) -> Result<Vec<TraceHop>, Stri
 // 原始 DNS 探测(UDP,自实现协议构造与解析,零第三方依赖)
 // ============================================================
 
-/// 构造标准 A 记录查询报文
-pub fn build_dns_query(domain: &str, id: u16) -> Vec<u8> {
+/// 构造标准 A 记录查询报文。
+/// 按 RFC 1035 校验:单标签 ≤63 字节、QNAME 线上格式 ≤255 字节;
+/// 超限返回 None,拒绝发送畸形报文(而不是 `len as u8` 截断出错误长度)。
+pub fn build_dns_query(domain: &str, id: u16) -> Option<Vec<u8>> {
     let mut p = Vec::with_capacity(12 + domain.len() + 6);
     p.extend_from_slice(&id.to_be_bytes()); // ID
     p.extend_from_slice(&0x0100u16.to_be_bytes()); // Flags: RD=1
@@ -413,17 +415,26 @@ pub fn build_dns_query(domain: &str, id: u16) -> Vec<u8> {
     p.extend_from_slice(&0u16.to_be_bytes()); // ANCOUNT
     p.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT
     p.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT
+    let mut qname_len = 0usize; // QNAME 线上长度(各长度字节+标签+根0)
     for label in domain.split('.') {
         if label.is_empty() {
             continue;
         }
+        if label.len() > 63 {
+            return None;
+        }
+        qname_len += 1 + label.len();
         p.push(label.len() as u8);
         p.extend_from_slice(label.as_bytes());
+    }
+    qname_len += 1; // 根标签
+    if qname_len > 255 {
+        return None;
     }
     p.push(0);
     p.extend_from_slice(&1u16.to_be_bytes()); // QTYPE = A
     p.extend_from_slice(&1u16.to_be_bytes()); // QCLASS = IN
-    p
+    Some(p)
 }
 
 /// 解析 DNS 响应:(id, ancount, 第一个 A 记录)
@@ -502,7 +513,20 @@ pub async fn dns_udp_probe(server: IpAddr, domain: &str) -> DnsServerProbe {
         .unwrap_or(0)
         & 0xFFFF) as u16)
         | 1;
-    let packet = build_dns_query(domain, id);
+    let base = DnsServerProbe {
+        server: server.to_string(),
+        ok: false,
+        rtt_ms: None,
+        answer_count: 0,
+        resolved_ip: None,
+        error: None,
+    };
+    let Some(packet) = build_dns_query(domain, id) else {
+        return DnsServerProbe {
+            error: Some("域名不符合 DNS 命名规则(标签超过 63 字节或名称过长)".into()),
+            ..base
+        };
+    };
     let req = tokio::time::timeout(Duration::from_millis(2500), async move {
         let bind = if server.is_ipv4() {
             "0.0.0.0:0"
@@ -519,14 +543,6 @@ pub async fn dns_udp_probe(server: IpAddr, domain: &str) -> DnsServerProbe {
         Ok::<_, std::io::Error>((rtt, buf[..n].to_vec()))
     })
     .await;
-    let base = DnsServerProbe {
-        server: server.to_string(),
-        ok: false,
-        rtt_ms: None,
-        answer_count: 0,
-        resolved_ip: None,
-        error: None,
-    };
     match req {
         Err(_) => DnsServerProbe {
             error: Some("查询超时(2.5s)".into()),
@@ -1365,7 +1381,7 @@ mod tests {
 
     #[test]
     fn test_dns_query_bytes() {
-        let q = build_dns_query("www.example.com", 0x1234);
+        let q = build_dns_query("www.example.com", 0x1234).expect("合法域名应构造成功");
         assert_eq!(&q[0..2], &[0x12, 0x34]); // ID
         assert_eq!(&q[2..4], &[0x01, 0x00]); // RD
         assert_eq!(&q[4..6], &[0, 1]); // QDCOUNT
@@ -1374,6 +1390,18 @@ mod tests {
         assert_eq!(&q[13..16], b"www");
         // 结尾 4 字节: QTYPE=1, QCLASS=1
         assert_eq!(&q[q.len() - 4..], &[0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn test_dns_query_rejects_oversized_labels() {
+        // 单标签 >63 字节:拒绝(不得 as u8 截断出畸形长度)
+        let long_label = "a".repeat(64);
+        assert!(build_dns_query(&format!("{long_label}.com"), 1).is_none());
+        // 63 字节边界:允许
+        assert!(build_dns_query(&format!("{}.com", "a".repeat(63)), 1).is_some());
+        // 总名长 >255 字节:拒绝(5 段 ×60 + 分隔 = 300+)
+        let many = (0..5).map(|_| "b".repeat(60)).collect::<Vec<_>>().join(".");
+        assert!(build_dns_query(&many, 1).is_none());
     }
 
     #[test]

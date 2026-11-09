@@ -33,6 +33,44 @@ pub struct AppInfo {
     pub data_dir: String,
 }
 
+/// 诊断命令统一错误结构:code 供前端分支判断,message 直接展示。
+/// 码表:invalid_input(入参为空/格式错) / invalid_host(主机名校验失败) /
+/// failed(诊断执行失败,原始文案在 message)
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandError {
+    pub code: String,
+    pub message: String,
+}
+
+impl CommandError {
+    pub fn new(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        Self::new("failed", message)
+    }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self {
+        Self::new("failed", message)
+    }
+}
+
+/// 历史导出结果:超出 5000 条时如实告知截断情况
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportOutcome {
+    pub path: String,
+    pub exported: u32,
+    pub total: u32,
+}
+
 #[tauri::command]
 pub fn get_app_info(state: tauri::State<AppState>) -> AppInfo {
     AppInfo {
@@ -339,16 +377,18 @@ pub async fn history_clear(state: tauri::State<'_, AppState>) -> Result<(), Stri
         .map_err(|e| e.to_string())?
 }
 
-/// 打开系统保存对话框并写出 CSV / JSON
+/// 打开系统保存对话框并写出 CSV / JSON;超出 5000 条时如实返回截断情况
 #[tauri::command]
 pub async fn history_export(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     format: String,
-) -> Result<String, String> {
+) -> Result<ExportOutcome, String> {
     let storage = state.storage.clone();
-    let rows = tauri::async_runtime::spawn_blocking(move || {
-        storage.list_history(None, None, true, 5000)
+    let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
+        let rows = storage.list_history(None, None, true, 5000)?;
+        let total = storage.history_count()? as u32;
+        Ok::<_, String>((rows, total))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -369,7 +409,11 @@ pub async fn history_export(
     };
     let path = save_via_dialog(app, &default_name, filters).await?;
     std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
-    Ok(path)
+    Ok(ExportOutcome {
+        path,
+        exported: rows.len() as u32,
+        total,
+    })
 }
 
 /// 为单条测速生成 HTML 报告并保存
@@ -507,45 +551,45 @@ pub fn monitor_latest(state: tauri::State<AppState>) -> Option<crate::monitor::M
 // ============================================================
 
 #[tauri::command]
-pub fn diag_local_network() -> diagnostics::LocalNetInfo {
+pub fn diag_local_network() -> Result<diagnostics::LocalNetInfo, CommandError> {
     let ifaces = diagnostics::collect_interfaces();
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_default();
-    diagnostics::LocalNetInfo {
+    Ok(diagnostics::LocalNetInfo {
         interfaces: ifaces,
         hostname,
         os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-    }
+    })
 }
 
 #[tauri::command]
-pub async fn diag_wifi_details() -> Option<diagnostics::WifiDetails> {
-    diagnostics::wifi_details().await
+pub async fn diag_wifi_details() -> Result<Option<diagnostics::WifiDetails>, CommandError> {
+    Ok(diagnostics::wifi_details().await)
 }
 
 #[tauri::command]
 pub async fn diag_public_info(
     state: tauri::State<'_, AppState>,
-) -> Result<diagnostics::PublicInfo, String> {
+) -> Result<diagnostics::PublicInfo, CommandError> {
     let allowed = state.settings.settings.read().await.show_public_ip;
     Ok(diagnostics::public_info(allowed).await)
 }
 
 #[tauri::command]
-pub async fn diag_dns_test() -> diagnostics::DnsTestReport {
-    diagnostics::dns_test().await
+pub async fn diag_dns_test() -> Result<diagnostics::DnsTestReport, CommandError> {
+    Ok(diagnostics::dns_test().await)
 }
 
 #[tauri::command]
-pub async fn diag_gateway_test() -> diagnostics::GatewayReport {
-    diagnostics::gateway_test().await
+pub async fn diag_gateway_test() -> Result<diagnostics::GatewayReport, CommandError> {
+    Ok(diagnostics::gateway_test().await)
 }
 
 #[tauri::command]
 pub async fn diag_tcp_test(
     targets: Option<Vec<String>>,
-) -> Vec<diagnostics::TcpResult> {
+) -> Result<Vec<diagnostics::TcpResult>, CommandError> {
     // 默认目标集:常见关键服务(均为常量,无注入面)
     let list: Vec<(String, u16)> = targets
         .map(|v| {
@@ -570,11 +614,11 @@ pub async fn diag_tcp_test(
     for (host, port) in list {
         out.push(diagnostics::tcp_connect_test(&host, port).await);
     }
-    out
+    Ok(out)
 }
 
 #[tauri::command]
-pub async fn diag_https_test() -> Vec<diagnostics::HttpsResult> {
+pub async fn diag_https_test() -> Result<Vec<diagnostics::HttpsResult>, CommandError> {
     let urls = [
         "https://speed.cloudflare.com/__down?bytes=0",
         "https://www.msftconnecttest.com/connecttest.txt",
@@ -584,7 +628,7 @@ pub async fn diag_https_test() -> Vec<diagnostics::HttpsResult> {
     for u in urls {
         out.push(diagnostics::https_test(u).await);
     }
-    out
+    Ok(out)
 }
 
 #[tauri::command]
@@ -592,7 +636,7 @@ pub async fn diag_traceroute(
     app: AppHandle,
     host: String,
     max_hops: Option<u32>,
-) -> Result<Vec<crate::engine::quality::TraceHop>, String> {
+) -> Result<Vec<crate::engine::quality::TraceHop>, CommandError> {
     let hops = diagnostics::traceroute(&host, max_hops.unwrap_or(15).clamp(3, 30)).await?;
     // 逐跳事件(前端可实时渲染)
     for h in &hops {
@@ -602,16 +646,19 @@ pub async fn diag_traceroute(
 }
 
 #[tauri::command]
-pub async fn diag_ping_test(host: String, count: Option<u32>) -> PingReport {
+pub async fn diag_ping_test(
+    host: String,
+    count: Option<u32>,
+) -> Result<PingReport, CommandError> {
     let count = count.unwrap_or(8).clamp(2, 30);
     let out = diagnostics::icmp_ping(&host, count, 1500).await;
-    PingReport {
+    Ok(PingReport {
         host,
         sent: count,
         loss_percent: out.loss_percent,
         rtts_ms: out.rtts_ms,
         avg_ms: out.avg_ms,
-    }
+    })
 }
 
 #[derive(Serialize)]
@@ -626,7 +673,7 @@ pub struct PingReport {
 #[tauri::command]
 pub async fn diag_ipv6_check(
     state: tauri::State<'_, AppState>,
-) -> Result<diagnostics::IpVersionCheck, String> {
+) -> Result<diagnostics::IpVersionCheck, CommandError> {
     let allowed = state.settings.settings.read().await.show_public_ip;
     Ok(diagnostics::ipv6_check(allowed).await)
 }
@@ -636,27 +683,34 @@ pub async fn diag_route_quality(
     host: String,
     max_hops: Option<u32>,
     probes: Option<u32>,
-) -> Result<diagnostics::RouteQualityReport, String> {
-    diagnostics::route_quality(&host, max_hops.unwrap_or(12), probes.unwrap_or(6)).await
+) -> Result<diagnostics::RouteQualityReport, CommandError> {
+    diagnostics::route_quality(&host, max_hops.unwrap_or(12), probes.unwrap_or(6))
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn diag_dns_consistency(
     domain: String,
-) -> Result<diagnostics::DnsConsistencyReport, String> {
-    if domain.trim().is_empty() {
-        return Err("域名不能为空".into());
+) -> Result<diagnostics::DnsConsistencyReport, CommandError> {
+    let domain = domain.trim().to_string();
+    if domain.is_empty() {
+        return Err(CommandError::new("invalid_input", "域名不能为空"));
+    }
+    if !diagnostics::valid_host(&domain) {
+        return Err(CommandError::new("invalid_host", "无效的域名"));
     }
     Ok(diagnostics::dns_consistency(&domain).await)
 }
 
 #[tauri::command]
-pub async fn diag_nat_type() -> Result<diagnostics::NatReport, String> {
+pub async fn diag_nat_type() -> Result<diagnostics::NatReport, CommandError> {
     Ok(diagnostics::nat_type().await)
 }
 
 #[tauri::command]
-pub async fn diag_connectivity_grid() -> Result<Vec<diagnostics::ConnectivityEntry>, String> {
+pub async fn diag_connectivity_grid(
+) -> Result<Vec<diagnostics::ConnectivityEntry>, CommandError> {
     Ok(diagnostics::connectivity_grid().await)
 }
 

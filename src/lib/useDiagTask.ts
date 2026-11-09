@@ -1,5 +1,6 @@
 // 诊断检测任务通用封装:统一各检测项 { run, running } 生命周期
 // (置 running → 可选清旧结果 → 执行 → 成功写结果 / 失败弹 toast → 复位 running)
+import { errMsg } from "../api";
 import { useApp } from "../store/app";
 
 export function useDiagTask<T>(opts: {
@@ -18,7 +19,7 @@ export function useDiagTask<T>(opts: {
     try {
       setResult(await exec());
     } catch (e) {
-      useApp.getState().toast("error", String(e));
+      useApp.getState().toast("error", errMsg(e));
     } finally {
       setRunning(false);
     }

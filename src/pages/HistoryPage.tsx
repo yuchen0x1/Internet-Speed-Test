@@ -100,8 +100,12 @@ export function HistoryPage() {
 
   const doExport = async (format: "csv" | "json") => {
     try {
-      const path = await api.historyExport(format);
-      toast("success", `已导出:${path}`);
+      const r = await api.historyExport(format);
+      if (r.total > r.exported) {
+        toast("warn", `已导出前 ${r.exported} 条(共 ${r.total} 条,超出上限部分被截断):${r.path}`);
+      } else {
+        toast("success", `已导出:${r.path}`);
+      }
     } catch (e) {
       if (!isCancelError(e)) toast("error", `导出失败:${String(e)}`);
     }

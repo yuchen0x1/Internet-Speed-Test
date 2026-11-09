@@ -1,6 +1,6 @@
 // 网络诊断中心:本地/公网信息 + 各项检测(成功/失败/警告/未知如实展示)
 import React, { useEffect } from "react";
-import { api } from "../api";
+import { api, errMsg } from "../api";
 import { useApp } from "../store/app";
 import { useDiag } from "../store/diag";
 import { useDiagTask } from "../lib/useDiagTask";
@@ -83,7 +83,7 @@ export function DiagnosticsPage() {
       setWifi(w);
       setPub(p);
     } catch (e) {
-      toast("error", `本地网络信息获取失败:${String(e)}`);
+      toast("error", `本地网络信息获取失败:${errMsg(e)}`);
     }
   };
   useEffect(() => {

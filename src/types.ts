@@ -96,6 +96,13 @@ export interface HistoryRow {
   status: string;
 }
 
+/** 历史导出结果:超出 5000 条上限时 exported < total */
+export interface ExportOutcome {
+  path: string;
+  exported: number;
+  total: number;
+}
+
 export interface IfaceTick {
   name: string;
   rx_bps: number;
