@@ -80,7 +80,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 ## 开发与构建
 
-开发环境：Node.js 18+、Rust 1.80+（MSVC 工具链）、Windows WebView2。
+开发环境：Node.js 20.9+、Rust 1.80+（MSVC 工具链）、Windows WebView2。
 
 ```bash
 npm install
