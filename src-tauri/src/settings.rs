@@ -140,15 +140,15 @@ impl SettingsManager {
         }
     }
 
-    /// 原子写回(临时文件 + 重命名)
+    /// 原子写回(临时文件 + 重命名)。
+    /// Windows 上 `rename` 会直接覆盖已存在的目标,因此不能先删原文件——
+    /// 那会在"已删、未改名"的窗口里让进程崩溃丢失全部设置。
     pub async fn save(&self, settings: &AppSettings) -> Result<(), String> {
         let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
         let tmp = self.path.with_extension("json.tmp");
         tokio::fs::write(&tmp, json)
             .await
             .map_err(|e| e.to_string())?;
-        // Windows 上 rename 目标存在时会失败,先移除
-        let _ = tokio::fs::remove_file(&self.path).await;
         tokio::fs::rename(&tmp, &self.path)
             .await
             .map_err(|e| e.to_string())?;
@@ -166,10 +166,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let mut s = AppSettings::default();
-        s.theme = "light".into();
-        s.down_concurrency = 12;
-        s.show_public_ip = true;
+        let s = AppSettings {
+            theme: "light".into(),
+            down_concurrency: 12,
+            show_public_ip: true,
+            ..Default::default()
+        };
         let json = serde_json::to_string(&s).unwrap();
         let back: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.theme, "light");

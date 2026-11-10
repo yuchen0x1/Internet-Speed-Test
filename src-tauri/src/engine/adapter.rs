@@ -42,8 +42,8 @@ pub struct PhaseConfig {
 /// 提供商适配器:屏蔽底层协议差异
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {
+    /// 协议标识(阶段日志与事件标注用)
     fn provider(&self) -> &'static str;
-    fn client(&self) -> &reqwest::Client;
 
     /// 单次 HTTP 往返延迟(ms)。返回响应头到达耗时 ≈ RTT + 服务器处理。
     async fn ping_rtt(

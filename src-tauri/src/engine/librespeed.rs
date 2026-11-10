@@ -22,8 +22,6 @@ use super::model::ServerNodeInfo;
 const UPLOAD_CHUNK_MIN: usize = 128 * 1024;
 const UPLOAD_CHUNK_INITIAL: usize = 2 * 1024 * 1024;
 const UPLOAD_CHUNK_MAX: usize = 4 * 1024 * 1024;
-/// 每次计数粒度(流式计数字节块)
-const COUNT_GRANULARITY: usize = 64 * 1024;
 
 pub struct LibreSpeedAdapter {
     client: reqwest::Client,
@@ -46,10 +44,6 @@ impl LibreSpeedAdapter {
 impl ProviderAdapter for LibreSpeedAdapter {
     fn provider(&self) -> &'static str {
         "librespeed"
-    }
-
-    fn client(&self) -> &reqwest::Client {
-        &self.client
     }
 
     async fn ping_rtt(
@@ -99,7 +93,7 @@ impl ProviderAdapter for LibreSpeedAdapter {
                             continue;
                         }
                     };
-                    let mut stream = resp.bytes_stream();
+                    let stream = resp.bytes_stream();
                     futures_util::pin_mut!(stream);
                     while let Some(item) = tok::select_chunk(&mut stream, &token).await {
                         match item {

@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { api, onMonitorTick, onNetStatus } from "../api";
-import type { AppSettings, MonitorTick, NetStatus } from "../types";
+import type { AppInfo, AppSettings, MonitorTick, NetStatus } from "../types";
 
 export type PageId =
   | "speedtest"
@@ -16,7 +16,7 @@ export type PageId =
 
 interface AppStore {
   booted: boolean;
-  appInfo: { name: string; version: string; os: string; data_dir: string } | null;
+  appInfo: AppInfo | null;
   settings: AppSettings | null;
   net: NetStatus;
   page: PageId;
@@ -33,6 +33,7 @@ interface AppStore {
 
 let toastId = 1;
 let listenersBound = false;
+let settingsSaveQueue: Promise<void> = Promise.resolve();
 
 export const useApp = create<AppStore>((set, get) => ({
   booted: false,
@@ -73,12 +74,32 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ settings: next });
     get().applyTheme();
     if (persist) {
-      try {
-        await api.setSettings(next);
-      } catch (e) {
-        get().toast("error", `设置保存失败:${String(e)}`);
-        return false;
-      }
+      // IPC 接收完整设置对象;串行保存并在轮到本次写入时读取最新状态,避免并发改动互相覆盖。
+      const save = settingsSaveQueue.then(async () => {
+        const latest = get().settings;
+        if (!latest) return false;
+        try {
+          await api.setSettings(latest);
+          return true;
+        } catch (e) {
+          // 仅回滚本次补丁中仍保持原乐观值的字段,不覆盖后续同字段修改。
+          set((state) => {
+            if (!state.settings) return {};
+            const rollback: Partial<AppSettings> = {};
+            for (const key of Object.keys(patch) as (keyof AppSettings)[]) {
+              if (Object.is(state.settings[key], next[key])) {
+                (rollback[key] as AppSettings[typeof key]) = cur[key];
+              }
+            }
+            return { settings: { ...state.settings, ...rollback } };
+          });
+          get().applyTheme();
+          get().toast("error", `设置保存失败:${String(e)}`);
+          return false;
+        }
+      });
+      settingsSaveQueue = save.then(() => undefined);
+      return save;
     }
     return true;
   },
@@ -134,6 +155,11 @@ export const useMonitor = create<MonitorStore>((set, get) => ({
   bind: async () => {
     if (get().bound) return;
     set({ bound: true });
+    try {
+      set({ paused: await api.monitorPaused() });
+    } catch {
+      // 状态查询不可用时保留本地默认值,事件绑定仍需继续。
+    }
     await onMonitorTick((tick) => {
       set((s) => {
         const buffer = [...s.buffer, tick];

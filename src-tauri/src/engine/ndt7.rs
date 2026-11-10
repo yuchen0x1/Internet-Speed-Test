@@ -36,9 +36,13 @@ const UPLOAD_POOL_BYTES: usize = 1024 * 1024;
 
 pub struct Ndt7Adapter {
     client: reqwest::Client,
-    /// 已发现的服务器(去抖:避免在 Locate API 失败时反复请求)
-    cached: std::sync::Mutex<Option<ServerNodeInfo>>,
+    /// 已发现的服务器 + 发现时刻(去抖:避免在 Locate API 失败时反复请求)。
+    /// 必须带 TTL:社区节点会下线,永久缓存会让自动优选一直指向死节点直到重启应用。
+    cached: std::sync::Mutex<Option<(ServerNodeInfo, std::time::Instant)>>,
 }
+
+/// 发现结果缓存有效期。到期后重新走 Locate + 握手探测。
+const DISCOVERY_TTL: Duration = Duration::from_secs(600);
 
 impl Ndt7Adapter {
     pub fn new() -> Self {
@@ -55,16 +59,31 @@ impl Ndt7Adapter {
         }
     }
 
+    /// 丢弃发现缓存。测速失败时调用,让下一次尝试重新发现可用节点。
+    pub fn invalidate(&self) {
+        *crate::safe_lock::lock(&self.cached) = None;
+    }
+
     /// 通过 Locate API v2 发现 NDT7 服务。
     /// 取响应中的前若干候选,**逐个做 WS 握手探测**,选第一个真正可用的服务
     /// (实测发现 Locate 首台可能是不可达的社区服务器,不能假定可用);
     /// 全部不可用返回 None,由上层按其他协议降级。
     pub async fn discover(&self) -> Option<ServerNodeInfo> {
-        if let Some(n) = self.cached.lock().unwrap().clone() {
-            return Some(n);
+        {
+            let guard = crate::safe_lock::lock(&self.cached);
+            if let Some((node, at)) = guard.as_ref() {
+                if at.elapsed() < DISCOVERY_TTL {
+                    return Some(node.clone());
+                }
+            }
         }
+        // 缓存过期:清掉后重新发现(失败时不写回,下次仍会重试)
+        *crate::safe_lock::lock(&self.cached) = None;
         let node = self.discover_uncached().await;
-        *self.cached.lock().unwrap() = node.clone();
+        if node.is_some() {
+            *crate::safe_lock::lock(&self.cached) =
+                node.clone().map(|n| (n, std::time::Instant::now()));
+        }
         node
     }
 
@@ -87,7 +106,7 @@ impl Ndt7Adapter {
             let probe = tokio::time::timeout(Duration::from_secs(4), ws_connect(&ws, &token)).await;
             if let Ok(Ok(_stream)) = probe {
                 let rtt = t0.elapsed().as_secs_f64() * 1000.0;
-                let better = best.as_ref().map_or(true, |(_, b)| rtt < *b);
+                let better = best.as_ref().is_none_or(|(_, b)| rtt < *b);
                 if better {
                     best = Some((c, rtt));
                 }
@@ -122,7 +141,8 @@ pub fn parse_locate_candidates(text: &str) -> Vec<ServerNodeInfo> {
         .collect()
 }
 
-/// 取第一台可用的 NDT7 服务(不验证可达性;仅用于解析单测)。
+/// 取第一台可用的 NDT7 服务(不验证可达性)。当前仅用于解析单测。
+#[cfg(test)]
 pub fn parse_locate_response(text: &str) -> Option<ServerNodeInfo> {
     parse_locate_candidates(text).into_iter().next()
 }
@@ -252,10 +272,6 @@ async fn ws_connect(
 impl ProviderAdapter for Ndt7Adapter {
     fn provider(&self) -> &'static str {
         "ndt7"
-    }
-
-    fn client(&self) -> &reqwest::Client {
-        &self.client
     }
 
     /// 以 WS 握手耗时作为延迟(NDT7 无独立 ping 端点,握手即真实连接建立过程)。

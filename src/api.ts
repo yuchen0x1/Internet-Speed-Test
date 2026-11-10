@@ -8,6 +8,7 @@ import type {
   BatchTargetResult,
   DnsDistributionReport,
   ConnectivityEntry,
+  DiagRunRow,
   DnsConsistencyReport,
   DnsTestReport,
   ExportOutcome,
@@ -21,6 +22,7 @@ import type {
   NetStatus,
   PingReport,
   PublicInfo,
+  PrometheusStatus,
   RouteQualityReport,
   ServerNodeInfo,
   TcpResult,
@@ -76,16 +78,23 @@ export const api = {
   speedtestStart: () => invoke<void>("speedtest_start"),
   speedtestStop: () => invoke<void>("speedtest_stop"),
   speedtestRunning: () => invoke<boolean>("speedtest_running"),
+  speedtestPhase: () => invoke<string>("speedtest_phase"),
   openSpeedtestService: (service: string) => invoke<void>("open_speedtest_service", { service }),
 
-  historyList: (opts?: { from?: string; to?: string; desc?: boolean; limit?: number }) =>
+  historyList: (opts?: { from?: string; to?: string; desc?: boolean; limit?: number; cursorId?: number }) =>
     invoke<HistoryRow[]>("history_list", {
       from: opts?.from ?? null,
       to: opts?.to ?? null,
       desc: opts?.desc ?? true,
       limit: opts?.limit ?? 500,
+      cursorId: opts?.cursorId ?? null,
     }),
   historyDetail: (id: number) => invoke<TestResult | null>("history_detail", { id }),
+  historyCount: (opts?: { from?: string; to?: string }) =>
+    invoke<number>("history_count", {
+      from: opts?.from ?? null,
+      to: opts?.to ?? null,
+    }),
   historyDelete: (id: number) => invoke<void>("history_delete", { id }),
   historyClear: () => invoke<void>("history_clear"),
   historyExport: (format: "csv" | "json") =>
@@ -93,12 +102,21 @@ export const api = {
   historyExportReport: (id: number) => invoke<string>("history_export_report", { id }),
 
   monitorSetEnabled: (enabled: boolean) => invoke<void>("monitor_set_enabled", { enabled }),
+  monitorPaused: () => invoke<boolean>("monitor_paused"),
   monitorSetPaused: (paused: boolean) => invoke<void>("monitor_set_paused", { paused }),
   monitorHistory: (windowSecs: number) =>
     invoke<MonitorTick[]>("monitor_history", { windowSecs }),
   monitorLatest: () => invoke<MonitorTick | null>("monitor_latest"),
+  prometheusStatus: () => invoke<PrometheusStatus>("prometheus_status"),
 
   diagLocal: () => invoke<LocalNetInfo>("diag_local_network"),
+  diagHistoryList: (opts?: { kind?: string; limit?: number }) =>
+    invoke<DiagRunRow[]>("diag_history_list", {
+      kind: opts?.kind ?? null,
+      limit: opts?.limit ?? 200,
+    }),
+  diagHistoryDetail: (id: number) => invoke<string | null>("diag_history_detail", { id }),
+  diagHistoryClear: () => invoke<number>("diag_history_clear"),
   diagWifi: () => invoke<WifiDetails | null>("diag_wifi_details"),
   diagPublic: () => invoke<PublicInfo>("diag_public_info"),
   diagDns: () => invoke<DnsTestReport>("diag_dns_test"),

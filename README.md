@@ -10,7 +10,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 ## 界面预览
 
-以下截图来自 v1.8.0 release 构建版在 Windows 上的实际运行，使用用户提供的最终截图素材。
+以下界面截图为用户提供的运行素材，截图中的关于页显示 v1.8.0；它们用于展示页面布局，不作为 v1.9.0 的本轮运行证据。
 
 | 真实测速 | 网络质量 |
 | --- | --- |
@@ -58,7 +58,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 - **系统**：Windows 10/11 x64。
 - **运行依赖**：Windows WebView2；Windows 10/11 通常已预装。
-- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.9.0_x64-setup.exe`。
+- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.10.0_x64-setup.exe`。
 - **安装模式**：Tauri NSIS `currentUser`，默认按当前用户安装，不需要管理员权限。
 - **WebView2 安装**：安装器使用 `downloadBootstrapper` 模式，在缺少运行时的环境中引导安装。
 
@@ -187,6 +187,21 @@ ICMP 可能被目标主机或中间设备限速、丢弃。应用把 HTTP 失败
 ## 安全修复
 
 当前前端图标构建依赖 `sharp@0.35.5`，对应的 npm audit 结果为 0 vulnerabilities。Rust 的 `glib` 告警来自非 Windows GTK/WebKit 依赖链，Windows 构建目标不包含该依赖；项目没有伪造锁文件版本或进行未经验证的大版本迁移。
+
+## v1.10.0
+
+- 测速历史新增游标分页与“加载更多”，大数据量可完整浏览且并发增删不漂移。
+- 诊断历史支持按类型筛选；监控暂停状态可在页面重载后恢复。
+- CSV 导出全字段转义并中和公式注入；历史统计明确区分已加载条数与筛选总数。
+- 界面可访问性升级：模态框焦点管理、全局焦点环、Ctrl+1..8 快捷导航、页面错误边界。
+- CI 增加格式/严格 lint/依赖审计门禁并固定工具链版本；7 个页面按需加载减小主包体积。
+
+## v1.9.0
+
+- 提高历史数据与导出的可信度：准确计数、CSV 公式注入防护、诊断历史持久化及按类型筛选。
+- 改善监控、Prometheus、测速状态恢复和设置文件写入的可靠性。
+- 增加错误边界、可访问性、键盘快捷导航、历史游标分页和按需页面加载。
+- 加强 Rust 格式/lint 门禁与 CI 依赖审计配置。
 
 ## v1.8.0
 

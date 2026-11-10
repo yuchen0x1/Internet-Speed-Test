@@ -48,8 +48,6 @@ const SAMPLE_INTERVAL_MS: u64 = 200;
 pub enum EventSink {
     /// 桌面端:Tauri 事件总线
     App(tauri::AppHandle),
-    /// 静默(测试用)
-    Quiet,
     /// CLI:标准通道(供外部线程实时读取)
     Chan(std::sync::mpsc::Sender<EngineEvent>),
 }
@@ -61,7 +59,6 @@ impl EventSink {
                 use tauri::Emitter as _;
                 let _ = h.emit("speedtest://event", &ev);
             }
-            EventSink::Quiet => {}
             EventSink::Chan(tx) => {
                 let _ = tx.send(ev);
             }
@@ -109,7 +106,7 @@ impl SpeedTestEngine {
     }
 
     pub fn current_phase(&self) -> TestPhase {
-        *self.phase.lock().unwrap()
+        *crate::safe_lock::lock(&self.phase)
     }
 
     /// 启动测速(防重复;返回 Err 表示未启动)。事件经 sink 回传,结果如实入库。
@@ -137,8 +134,8 @@ impl SpeedTestEngine {
         tokio::spawn(async move {
             let result = engine.run_test(&sink, &settings, &storage, &cancel).await;
             // 收尾:释放 token 与运行状态,确保可再次启动
-            *engine.cancel_token.lock().unwrap() = None;
-            *engine.phase.lock().unwrap() = TestPhase::Idle;
+            *crate::safe_lock::lock(&engine.cancel_token) = None;
+            *crate::safe_lock::lock(&engine.phase) = TestPhase::Idle;
             engine.running.store(false, Ordering::SeqCst);
             let _ = tx.send(result);
         });
@@ -150,7 +147,7 @@ impl SpeedTestEngine {
     /// 未带 comctl v6 manifest 的测试 exe 在 System32 comctl32 缺 TaskDialogIndirect
     /// 导出的系统上会以 0xC0000139 无法启动)。
     fn try_activate(&self) -> Option<CancellationToken> {
-        let mut slot = self.cancel_token.lock().unwrap();
+        let mut slot = crate::safe_lock::lock(&self.cancel_token);
         if self
             .running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -176,13 +173,13 @@ impl SpeedTestEngine {
 
     /// 安全取消:通知所有阶段终止,由 run_test 收尾并释放资源
     pub fn stop(&self) {
-        if let Some(t) = self.cancel_token.lock().unwrap().as_ref() {
+        if let Some(t) = crate::safe_lock::lock(&self.cancel_token).as_ref() {
             t.cancel();
         }
     }
 
     fn set_phase(&self, sink: &EventSink, p: TestPhase, message: &str) {
-        *self.phase.lock().unwrap() = p;
+        *crate::safe_lock::lock(&self.phase) = p;
         sink.emit(EngineEvent::Phase {
             phase: p.as_str().to_string(),
             message: message.into(),
@@ -220,7 +217,9 @@ impl SpeedTestEngine {
             cfg.duration_secs, cfg.down_streams, cfg.duration_secs, cfg.up_streams
         ));
         if cfg.precision {
-            result.conditions.push("精度模式:样本密度与并发已提高".into());
+            result
+                .conditions
+                .push("精度模式:样本密度与并发已提高".into());
         }
 
         let outcome = self
@@ -231,11 +230,12 @@ impl SpeedTestEngine {
             Ok(true) => {
                 result.status = "completed".into();
                 result.quality = Some(quality::analyze_quality(&result));
-                result.finished_at =
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                 result.duration_ms = t0.elapsed().as_millis() as u64;
                 self.set_phase(sink, TestPhase::Finished, "测速完成");
-                sink.emit(EngineEvent::Finished { result: result.clone() });
+                sink.emit(EngineEvent::Finished {
+                    result: Box::new(result.clone()),
+                });
                 if settings.autosave_history {
                     if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
                         log::warn!("历史记录写入失败: {e}");
@@ -244,12 +244,13 @@ impl SpeedTestEngine {
             }
             Ok(false) => {
                 result.status = "cancelled".into();
-                result.finished_at =
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                 result.duration_ms = t0.elapsed().as_millis() as u64;
                 result.quality = Some(quality::analyze_quality(&result));
                 sink.emit(EngineEvent::Cancelled);
-                sink.emit(EngineEvent::Finished { result: result.clone() });
+                sink.emit(EngineEvent::Finished {
+                    result: Box::new(result.clone()),
+                });
                 if settings.autosave_history {
                     if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
                         log::warn!("历史记录写入失败: {e}");
@@ -259,9 +260,11 @@ impl SpeedTestEngine {
             Err(err) => {
                 result.status = "failed".into();
                 result.error = Some(err.clone());
-                result.finished_at =
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                 result.duration_ms = t0.elapsed().as_millis() as u64;
+                // 失败时丢弃可重新发现的节点缓存:NDT7 社区节点可能已下线,
+                // 下次测速应重新走 Locate 而不是复用同一个死节点。
+                self.registry.invalidate_discovery();
                 sink.emit(EngineEvent::Failed { error: err });
                 if settings.autosave_history {
                     if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
@@ -290,8 +293,10 @@ impl SpeedTestEngine {
         let ifaces = diagnostics::collect_interfaces();
         if let Some(def) = ifaces.iter().find(|i| i.is_default) {
             result.network_type = def.kind.clone();
-            result.interface_name =
-                def.friendly_name.clone().unwrap_or_else(|| def.name.clone());
+            result.interface_name = def
+                .friendly_name
+                .clone()
+                .unwrap_or_else(|| def.name.clone());
         } else {
             return Err("未检测到可用的本地网络接口".into());
         }
@@ -314,9 +319,11 @@ impl SpeedTestEngine {
                 "servers://probed",
                 probes
                     .iter()
-                    .map(|p| serde_json::json!({
-                        "id": p.node.id, "alive": p.alive, "latencyMs": p.latency_ms
-                    }))
+                    .map(|p| {
+                        serde_json::json!({
+                            "id": p.node.id, "alive": p.alive, "latencyMs": p.latency_ms
+                        })
+                    })
                     .collect::<Vec<_>>(),
             );
             match chosen {
@@ -325,9 +332,7 @@ impl SpeedTestEngine {
                     n
                 }
                 None => {
-                    return Err(
-                        "未找到可用的测速节点:所有节点探测失败,请检查网络或稍后重试".into()
-                    )
+                    return Err("未找到可用的测速节点:所有节点探测失败,请检查网络或稍后重试".into())
                 }
             }
         } else {
@@ -344,9 +349,7 @@ impl SpeedTestEngine {
                         log::warn!("手动节点不在列表中,按 LibreSpeed 默认端点构造(由真实测试验证)");
                         n
                     }
-                    None => {
-                        return Err("所选测速节点不可用,请在节点管理中重新选择".into())
-                    }
+                    None => return Err("所选测速节点不可用,请在节点管理中重新选择".into()),
                 },
             }
         };
@@ -396,7 +399,8 @@ impl SpeedTestEngine {
         if rtts.is_empty() {
             return Err("延迟测试失败:所有测量请求均超时或被拒绝".into());
         }
-        result.idle_ping_ms = quality::median(&mut rtts.clone());
+        let mut sorted_rtts = rtts.clone();
+        result.idle_ping_ms = quality::median(&mut sorted_rtts);
         result.ping_min_ms = rtts.iter().cloned().fold(f64::MAX, f64::min);
         result.ping_max_ms = rtts.iter().cloned().fold(0.0, f64::max);
 
@@ -404,8 +408,14 @@ impl SpeedTestEngine {
         self.set_phase(sink, TestPhase::Download, "正在执行下载测速");
         let dl = self
             .run_throughput_phase(
-                sink, &node, "download", cfg.down_streams, cfg.duration_secs,
-                cfg.precision, token, t0, &mut result.down_samples,
+                sink,
+                &node,
+                "download",
+                cfg.down_streams,
+                cfg.duration_secs,
+                cfg.precision,
+                token,
+                &mut result.down_samples,
             )
             .await;
         match dl {
@@ -420,8 +430,9 @@ impl SpeedTestEngine {
                 );
                 result.download_peak_mbps = quality::peak_from_samples(&result.down_samples);
                 if bytes == 0 {
-                    return Err("下载测试失败:未能从测速服务器接收到数据(服务器不可用或网络中断)"
-                        .into());
+                    return Err(
+                        "下载测试失败:未能从测速服务器接收到数据(服务器不可用或网络中断)".into(),
+                    );
                 }
             }
             PhaseOutcome::Cancelled => return Ok(false),
@@ -432,8 +443,14 @@ impl SpeedTestEngine {
         self.set_phase(sink, TestPhase::Upload, "正在执行上传测速");
         let ul = self
             .run_throughput_phase(
-                sink, &node, "upload", cfg.up_streams, cfg.duration_secs,
-                cfg.precision, token, t0, &mut result.up_samples,
+                sink,
+                &node,
+                "upload",
+                cfg.up_streams,
+                cfg.duration_secs,
+                cfg.precision,
+                token,
+                &mut result.up_samples,
             )
             .await;
         match ul {
@@ -443,7 +460,8 @@ impl SpeedTestEngine {
                 if bytes == 0 {
                     // 上传失败不终止整体测试,如实标注
                     result.upload_mbps = None;
-                    result.conditions
+                    result
+                        .conditions
                         .push("上传测试未成功:服务器拒绝了全部上传请求".into());
                 } else {
                     result.upload_mbps = Some(quality::stable_window_mbps(
@@ -452,8 +470,7 @@ impl SpeedTestEngine {
                         WARMUP_MS,
                         warmup_bytes,
                     ));
-                    result.upload_peak_mbps =
-                        Some(quality::peak_from_samples(&result.up_samples));
+                    result.upload_peak_mbps = Some(quality::peak_from_samples(&result.up_samples));
                 }
             }
             PhaseOutcome::Cancelled => return Ok(false),
@@ -488,7 +505,6 @@ impl SpeedTestEngine {
         duration_secs: u64,
         precision: bool,
         parent: &CancellationToken,
-        t0: Instant,
         samples_out: &mut Vec<[f64; 2]>,
     ) -> PhaseOutcome {
         let child = parent.child_token();
@@ -510,7 +526,7 @@ impl SpeedTestEngine {
             let direction = direction.to_string();
             tokio::spawn(async move {
                 sampler_task(
-                    &sink, &counters, &samples, &bytes_log, &child, &stalled, t0, direction,
+                    &sink, &counters, &samples, &bytes_log, &child, &stalled, direction,
                 )
                 .await;
             })
@@ -534,6 +550,13 @@ impl SpeedTestEngine {
             duration,
             streams: if precision { streams + 2 } else { streams },
         };
+        // 标注实际执行的协议适配器,便于排查"同一节点换协议后结果差异"
+        log::info!(
+            "{} 阶段使用 {} 适配器(并发 {})",
+            direction,
+            adapter.provider(),
+            cfg_phase.streams
+        );
         if direction == "download" {
             adapter
                 .run_download(node, counters.clone(), cfg_phase, child.clone())
@@ -550,7 +573,7 @@ impl SpeedTestEngine {
 
         let bytes = counters.total();
         let failures = counters.failure_count();
-        samples_out.extend(samples.lock().unwrap().drain(..));
+        samples_out.extend(crate::safe_lock::lock(&samples).drain(..));
         if parent.is_cancelled() {
             return PhaseOutcome::Cancelled;
         }
@@ -558,15 +581,13 @@ impl SpeedTestEngine {
             return PhaseOutcome::Failed("数据传输完全停滞(疑似网络中断或服务器故障)".into());
         }
         // 预热结束时已发送的字节数(从字节日志取第一个 ≥ WARMUP 的点)
-        let warmup_bytes = bytes_log
-            .lock()
-            .unwrap()
+        let warmup_bytes = crate::safe_lock::lock(&bytes_log)
             .iter()
             .find(|(ms, _)| *ms as f64 >= WARMUP_MS)
             .map(|(_, b)| *b)
             .unwrap_or(bytes);
         let loaded_median = {
-            let mut v = loaded.lock().unwrap().clone();
+            let mut v = crate::safe_lock::lock(&loaded).clone();
             if v.is_empty() {
                 None
             } else {
@@ -607,7 +628,6 @@ async fn sampler_task(
     bytes_log: &Arc<Mutex<Vec<(u64, u64)>>>,
     token: &CancellationToken,
     stalled: &AtomicBool,
-    t0: Instant,
     direction: String,
 ) {
     let mut last_bytes: u64 = 0;
@@ -623,12 +643,11 @@ async fn sampler_task(
         }
         elapsed_ms += SAMPLE_INTERVAL_MS;
         let cur = counters.total();
-        let inst_bps =
-            cur.saturating_sub(last_bytes) as f64 / (SAMPLE_INTERVAL_MS as f64 / 1000.0);
+        let inst_bps = cur.saturating_sub(last_bytes) as f64 / (SAMPLE_INTERVAL_MS as f64 / 1000.0);
         let mbps = bytes_per_sec_to_mbps(inst_bps);
 
-        samples.lock().unwrap().push([elapsed_ms as f64, mbps]);
-        bytes_log.lock().unwrap().push((elapsed_ms, cur));
+        crate::safe_lock::lock(samples).push([elapsed_ms as f64, mbps]);
+        crate::safe_lock::lock(bytes_log).push((elapsed_ms, cur));
         sink.emit(EngineEvent::Speed {
             direction: direction.clone(),
             mbps,
@@ -647,7 +666,6 @@ async fn sampler_task(
             stall_count = 0;
         }
         last_bytes = cur;
-        let _ = t0;
     }
 }
 
@@ -667,7 +685,7 @@ async fn loaded_ping_task(
             _ = token.cancelled() => return,
             _ = tick.tick() => {
                 if let Ok(rtt) = registry.ping_node(node, token).await {
-                    loaded.lock().unwrap().push(rtt);
+                    crate::safe_lock::lock(loaded).push(rtt);
                     sink.emit(EngineEvent::LoadedLatency {
                         direction: direction.clone(),
                         rtt_ms: rtt,
@@ -692,7 +710,9 @@ mod tests {
         assert_eq!(n.dl_url, "garbage.php");
         assert_eq!(n.ul_url, "empty.php");
         assert_eq!(n.ping_url, "empty.php");
-        assert!(n.download_url().starts_with("https://cs.lt6.ltd/garbage.php"));
+        assert!(n
+            .download_url()
+            .starts_with("https://cs.lt6.ltd/garbage.php"));
 
         // HTTP / 非 URL / 空值一律拒绝(不静默降级)
         assert!(manual_node_fallback("http://speed.example.com").is_none());
@@ -719,10 +739,7 @@ mod tests {
             "首次激活应成功并写入取消 token"
         );
         assert!(engine.is_running(), "激活后应处于运行状态");
-        assert!(
-            engine.try_activate().is_none(),
-            "运行中重复激活必须被拒绝"
-        );
+        assert!(engine.try_activate().is_none(), "运行中重复激活必须被拒绝");
         // stop 只取消当前 token;运行标志由 run_test 收尾复位,测试中不触发
         engine.stop();
     }

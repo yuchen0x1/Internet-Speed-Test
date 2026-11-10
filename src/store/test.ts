@@ -38,6 +38,8 @@ interface TestStore {
 
   bind: () => Promise<void>;
   reset: () => void;
+  /** 与后端引擎对账:托盘启动测速或窗口重载后,前端可能错过事件而状态停在 idle */
+  syncRunning: () => Promise<void>;
 }
 
 let elapsedTimer: number | null = null;
@@ -176,6 +178,46 @@ export const useTest = create<TestStore>((set, get) => ({
       result: null,
       error: null,
     }),
+
+  syncRunning: async () => {
+    // 托盘菜单可以直接启动测速,窗口重载也会丢失事件订阅期间的状态:
+    // 这两种情况下前端 store 会一直显示 idle,而引擎实际在跑。
+    // 以后端的真实运行状态为准做一次对账,不猜测阶段细节(缺失的样本无法补造)。
+    let running: boolean;
+    let backendPhase = "";
+    try {
+      // 阶段与运行状态一起取:阶段能说明"正在测哪一步",不必猜测
+      const [r, p] = await Promise.all([api.speedtestRunning(), api.speedtestPhase()]);
+      running = r;
+      backendPhase = p;
+    } catch {
+      return; // 查询失败时保持现状,不误改用户可见状态
+    }
+    const cur = get();
+    if (running && !cur.running) {
+      const phase = (["preparing", "latency", "download", "upload", "quality"] as Phase[])
+        .includes(backendPhase as Phase)
+        ? (backendPhase as Phase)
+        : "preparing";
+      set({
+        running: true,
+        phase,
+        message: `测速正在进行中(后端阶段:${phase},由托盘或后台启动)`,
+        error: null,
+      });
+      if (elapsedTimer == null) {
+        const t0 = Date.now() - cur.elapsedMs;
+        elapsedTimer = window.setInterval(
+          () => set((s) => ({ elapsedMs: s.running ? Date.now() - t0 : s.elapsedMs })),
+          200,
+        );
+      }
+    } else if (!running && cur.running) {
+      // 引擎已结束但没收到 finished 事件:解除 running,保留已有结果,不伪造数值
+      stopTimer();
+      set({ running: false, phase: "finished", message: "测速已结束" });
+    }
+  },
 }));
 
 // ------------------------------------------------------------

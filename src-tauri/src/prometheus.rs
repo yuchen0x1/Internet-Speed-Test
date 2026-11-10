@@ -5,21 +5,33 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+
 use crate::storage::Storage;
 
 /// 构造 Prometheus 文本格式(纯函数,可单测)
-pub fn build_metrics_text(latest: Option<&crate::storage::HistoryRow>, tests_total: u64, connected: bool) -> String {
+pub fn build_metrics_text(
+    latest: Option<&crate::storage::HistoryRow>,
+    tests_total: u64,
+    connected: bool,
+) -> String {
     let mut s = String::new();
     s.push_str("# HELP netvision_tests_total Total completed speed tests\n");
     s.push_str("# TYPE netvision_tests_total counter\n");
     s.push_str(&format!("netvision_tests_total {tests_total}\n"));
     s.push_str("# HELP netvision_network_connected Network currently connected\n");
     s.push_str("# TYPE netvision_network_connected gauge\n");
-    s.push_str(&format!("netvision_network_connected {}\n", if connected { 1 } else { 0 }));
+    s.push_str(&format!(
+        "netvision_network_connected {}\n",
+        if connected { 1 } else { 0 }
+    ));
     if let Some(r) = latest {
         s.push_str("# HELP netvision_last_download_mbps Last download speed (Mbps)\n");
         s.push_str("# TYPE netvision_last_download_mbps gauge\n");
-        s.push_str(&format!("netvision_last_download_mbps {:.2}\n", r.download_mbps));
+        s.push_str(&format!(
+            "netvision_last_download_mbps {:.2}\n",
+            r.download_mbps
+        ));
         s.push_str("# HELP netvision_last_upload_mbps Last upload speed (Mbps)\n");
         s.push_str("# TYPE netvision_last_upload_mbps gauge\n");
         if let Some(up) = r.upload_mbps {
@@ -53,6 +65,24 @@ struct PromInner {
     enabled: bool,
     port: u32,
     token: Option<tokio_util::sync::CancellationToken>,
+    /// 真实监听状态:true 表示已成功 bind 并进入 accept 循环。
+    /// 与设置里的 enabled 分开,才能区分"用户想开"和"真的开起来了"。
+    listening: bool,
+    /// 最近一次绑定失败的原因(绑定成功后清空)
+    last_error: Option<String>,
+}
+
+/// 前端可见的端点真实状态(绑定失败时设置页不能显示"已开启")
+#[derive(Debug, Clone, Serialize)]
+pub struct PrometheusStatus {
+    /// 用户设置是否要求开启
+    pub requested: bool,
+    /// 是否真的在监听
+    pub listening: bool,
+    /// 实际(或尝试)绑定的地址
+    pub url: String,
+    /// 绑定失败原因;正常时为 None
+    pub error: Option<String>,
 }
 
 pub struct PrometheusHandle {
@@ -67,7 +97,20 @@ impl PrometheusHandle {
                 enabled: false,
                 port: 9876,
                 token: None,
+                listening: false,
+                last_error: None,
             })),
+        }
+    }
+
+    /// 返回端点真实状态(供 UI 展示;不改变任何运行态)
+    pub fn status(&self) -> PrometheusStatus {
+        let inner = crate::safe_lock::lock(&self.inner);
+        PrometheusStatus {
+            requested: inner.enabled,
+            listening: inner.listening,
+            url: format!("http://127.0.0.1:{}/metrics", inner.port),
+            error: inner.last_error.clone(),
         }
     }
 
@@ -79,7 +122,7 @@ impl PrometheusHandle {
         storage: Arc<Storage>,
         connected_getter: Arc<dyn Fn() -> bool + Send + Sync>,
     ) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = crate::safe_lock::lock(&self.inner);
         if inner.enabled == enabled && inner.port == port && inner.token.is_some() == enabled {
             return; // 无变化
         }
@@ -89,6 +132,8 @@ impl PrometheusHandle {
         }
         inner.enabled = enabled;
         inner.port = port;
+        inner.listening = false;
+        inner.last_error = None;
         if !enabled {
             return;
         }
@@ -101,19 +146,31 @@ impl PrometheusHandle {
                 Ok(l) => l,
                 Err(e) => {
                     log::warn!("Prometheus 端口 {addr} 绑定失败: {e}");
-                    // 回滚:未真正监听时不保留"假活"状态,下次 apply 可重试绑定
-                    let mut g = slot.lock().unwrap();
+                    // 回滚:未真正监听时不保留"假活"状态,下次 apply 可重试绑定。
+                    // 同时把原因记入 last_error,设置页据此显示真实失败信息。
+                    let mut g = crate::safe_lock::lock(&slot);
                     if !token.is_cancelled() {
                         g.enabled = false;
+                        g.listening = false;
                         g.token = None;
+                        g.last_error = Some(format!("端口 {port} 绑定失败: {e}"));
                     }
                     return;
                 }
             };
+            // 已真正进入监听:标记 listening 并清掉历史错误
+            {
+                let mut g = crate::safe_lock::lock(&slot);
+                if token.is_cancelled() {
+                    return;
+                }
+                g.listening = true;
+                g.last_error = None;
+            }
             log::info!("Prometheus 指标端点已启动: http://{addr}/metrics");
             loop {
                 tokio::select! {
-                    _ = token.cancelled() => return,
+                    _ = token.cancelled() => break,
                     accepted = listener.accept() => {
                         let Ok((mut sock, _)) = accepted else { continue };
                         let storage = storage.clone();
@@ -156,6 +213,11 @@ impl PrometheusHandle {
                         });
                     }
                 }
+            }
+            // accept 循环退出(被取消或 listener 异常):不再处于监听态
+            {
+                let mut g = crate::safe_lock::lock(&slot);
+                g.listening = false;
             }
         });
     }

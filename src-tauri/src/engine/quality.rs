@@ -20,11 +20,9 @@ static AVG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:平均|Average)\s*=\s*(\d+(?:\.\d+)?)\s*ms").unwrap());
 static IPV4_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b").unwrap());
-static IPV6_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f:]{1,4}\b").unwrap()
-});
-static TRACE_TIME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(<)?\s*(\d+)\s*ms").unwrap());
+static IPV6_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f:]{1,4}\b").unwrap());
+static TRACE_TIME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(<)?\s*(\d+)\s*ms").unwrap());
 
 /// 计算延迟抖动(RFC 3550 风格:相邻样本差的绝对值均值)
 pub fn jitter_ms(samples: &[f64]) -> f64 {
@@ -39,7 +37,7 @@ pub fn jitter_ms(samples: &[f64]) -> f64 {
 }
 
 /// 中位数
-pub fn median(values: &mut Vec<f64>) -> f64 {
+pub fn median(values: &mut [f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
@@ -435,12 +433,14 @@ mod tests {
 
     #[test]
     fn test_rating_paths() {
-        let mut r = TestResult::default();
-        r.idle_ping_ms = 15.0;
-        r.jitter_ms = 2.0;
-        r.loaded_down_ms = Some(16.0);
-        r.loaded_up_ms = Some(17.0);
-        r.packet_loss_percent = Some(0.0);
+        let mut r = TestResult {
+            idle_ping_ms: 15.0,
+            jitter_ms: 2.0,
+            loaded_down_ms: Some(16.0),
+            loaded_up_ms: Some(17.0),
+            packet_loss_percent: Some(0.0),
+            ..Default::default()
+        };
         let q = analyze_quality(&r);
         assert_eq!(q.rating, "优秀");
         assert!(q.score >= 85);
@@ -460,10 +460,12 @@ mod tests {
 
     #[test]
     fn test_rating_loss_unknown() {
-        let mut r = TestResult::default();
-        r.idle_ping_ms = 25.0;
-        r.jitter_ms = 3.0;
-        r.packet_loss_percent = None; // 无法 ICMP
+        let r = TestResult {
+            idle_ping_ms: 25.0,
+            jitter_ms: 3.0,
+            packet_loss_percent: None, // 无法 ICMP
+            ..Default::default()
+        };
         let q = analyze_quality(&r);
         assert!(q.notes.iter().any(|n| n.contains("ICMP")));
         assert!(q.score >= 70); // 不因无法测量而崩溃性降分

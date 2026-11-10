@@ -4,25 +4,49 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 22.22.2
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
       - name: 安装前端依赖
-        run: npm ci
+        run: npm ci --registry=https://registry.npmjs.org
+
+      - name: 前端依赖审计
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+
+      - name: Rust 依赖审计
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: 检查 Rust 漏洞
+        run: cargo audit --deny warnings --file src-tauri/Cargo.lock
+
+      - name: Rust 格式检查
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust 严格 lint
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: 类型检查
         run: npm run typecheck

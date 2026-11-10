@@ -13,8 +13,8 @@
 //! - 日志不记录 IP / 主机名等敏感信息
 //! - 公网信息仅在用户授权时获取
 
-pub mod cli;
 mod batchtest;
+pub mod cli;
 mod commands;
 mod diagnostics;
 mod engine;
@@ -22,6 +22,7 @@ mod monitor;
 mod pingmon;
 mod prometheus;
 mod report;
+mod safe_lock;
 mod scheduler;
 mod settings;
 mod storage;
@@ -78,10 +79,7 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("无法定位应用数据目录");
+            let data_dir = app.path().app_data_dir().expect("无法定位应用数据目录");
             std::fs::create_dir_all(&data_dir)?;
 
             let settings_mgr = SettingsManager::load(&data_dir);
@@ -89,12 +87,12 @@ pub fn run() {
             let engine = Arc::new(engine::SpeedTestEngine::new());
 
             // 托盘图标(内嵌资源,避免运行时读文件失败)
-            let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?
-                .to_owned();
+            let icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?.to_owned();
             let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let test_item =
-                MenuItem::with_id(app, "start-test", "开始测速", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "退出 NetVision Pro", true, None::<&str>)?;
+            let test_item = MenuItem::with_id(app, "start-test", "开始测速", true, None::<&str>)?;
+            let quit_item =
+                MenuItem::with_id(app, "quit", "退出 NetVision Pro", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &test_item, &quit_item])?;
             let _tray = TrayIconBuilder::with_id("nv-tray")
                 .icon(icon)
@@ -175,13 +173,24 @@ pub fn run() {
             {
                 let storage_c = storage.clone();
                 let days = tauri::async_runtime::block_on(async {
-                    app.state::<AppState>().settings.settings.read().await.retention_days
+                    app.state::<AppState>()
+                        .settings
+                        .settings
+                        .read()
+                        .await
+                        .retention_days
                 });
                 if days > 0 {
                     match storage_c.cleanup_retention(days) {
                         Ok(n) if n > 0 => log::info!("保留策略:已清理 {n} 条过期记录"),
                         Ok(_) => {}
                         Err(e) => log::warn!("保留策略清理失败: {e}"),
+                    }
+                    // 诊断记录共用同一保留策略,避免单独再养一个设置项
+                    match storage_c.cleanup_diag_runs(days) {
+                        Ok(n) if n > 0 => log::info!("保留策略:已清理 {n} 条过期诊断记录"),
+                        Ok(_) => {}
+                        Err(e) => log::warn!("诊断记录清理失败: {e}"),
                     }
                 }
             }
@@ -265,6 +274,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::get_network_status,
+            commands::prometheus_status,
             commands::servers_list,
             commands::servers_refresh,
             commands::servers_set_favorite,
@@ -275,8 +285,10 @@ pub fn run() {
             commands::speedtest_start,
             commands::speedtest_stop,
             commands::speedtest_running,
+            commands::speedtest_phase,
             commands::open_speedtest_service,
             commands::history_list,
+            commands::history_count,
             commands::history_detail,
             commands::history_delete,
             commands::history_clear,
@@ -286,7 +298,11 @@ pub fn run() {
             commands::monitor_set_paused,
             commands::monitor_history,
             commands::monitor_latest,
+            commands::monitor_paused,
             commands::diag_local_network,
+            commands::diag_history_list,
+            commands::diag_history_detail,
+            commands::diag_history_clear,
             commands::diag_wifi_details,
             commands::diag_public_info,
             commands::diag_dns_test,

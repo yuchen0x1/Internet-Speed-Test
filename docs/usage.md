@@ -1,6 +1,6 @@
 # 使用指南
 
-本文对应 NetVision Pro v1.8.0 的 Windows 桌面版，页面名称以当前应用界面为准。
+本文对应 NetVision Pro v1.9.0 的 Windows 桌面版，页面名称以当前应用界面为准。
 
 ## 第一次测速
 

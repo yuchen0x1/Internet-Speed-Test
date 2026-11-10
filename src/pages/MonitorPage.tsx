@@ -89,7 +89,8 @@ export function MonitorPage() {
   const topIfaces = latest?.ifaces.slice(0, 6) ?? [];
 
   const toggleMonitor = async (on: boolean) => {
-    await updateSettings({ monitor_enabled: on });
+    const saved = await updateSettings({ monitor_enabled: on });
+    if (!saved) return;
     await api.monitorSetEnabled(on);
     toast("info", on ? "后台监控已开启" : "后台监控已关闭(不再采样,零开销)");
   };

@@ -87,11 +87,10 @@ mod tests {
 
     fn collect(body: &mut ChunkedBody) -> usize {
         let mut total = 0;
-        while let Poll::Ready(Some(Ok(b))) =
-            futures_core::Stream::poll_next(Pin::new(body), &mut Context::from_waker(
-                std::task::Waker::noop(),
-            ))
-        {
+        while let Poll::Ready(Some(Ok(b))) = futures_core::Stream::poll_next(
+            Pin::new(body),
+            &mut Context::from_waker(std::task::Waker::noop()),
+        ) {
             total += b.len();
         }
         total
@@ -101,7 +100,12 @@ mod tests {
     fn test_chunked_body_counts_all_bytes() {
         let pool = vec![7u8; 1024 * 1024];
         let counters = Arc::new(ThroughputCounters::default());
-        let mut body = ChunkedBody::new(pool, 3 * 1024 * 1024 + 12345, counters.clone(), CancellationToken::new());
+        let mut body = ChunkedBody::new(
+            pool,
+            3 * 1024 * 1024 + 12345,
+            counters.clone(),
+            CancellationToken::new(),
+        );
         let total = collect(&mut body);
         assert_eq!(total, 3 * 1024 * 1024 + 12345);
         assert_eq!(counters.total(), 3 * 1024 * 1024 + 12345);

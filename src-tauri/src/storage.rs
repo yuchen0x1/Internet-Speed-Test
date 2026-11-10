@@ -31,15 +31,34 @@ pub struct HistoryRow {
     pub status: String,
 }
 
+/// 诊断历史的列表行(不含完整 detail,避免列表查询搬运大 JSON)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagRunRow {
+    pub id: i64,
+    pub created_at: String,
+    /// 诊断类型:traceroute / ping / dns / https / route_quality / nat / ...
+    pub kind: String,
+    pub target: Option<String>,
+    pub ok: bool,
+    pub summary: String,
+}
+
+/// 待写入的诊断记录(借用,避免克隆大字符串)
+pub struct DiagRunInput<'a> {
+    pub created_at: &'a str,
+    pub kind: &'a str,
+    pub target: Option<&'a str>,
+    pub ok: bool,
+    pub summary: &'a str,
+    pub detail: Option<&'a str>,
+}
+
 pub struct Storage {
     conn: Arc<Mutex<Connection>>,
 }
 
 /// 在阻塞线程池写入历史:async 调用方(引擎收尾)不占用 tokio 工作线程
-pub async fn insert_result_blocking(
-    storage: &Arc<Storage>,
-    r: &TestResult,
-) -> Result<(), String> {
+pub async fn insert_result_blocking(storage: &Arc<Storage>, r: &TestResult) -> Result<(), String> {
     let s = Arc::clone(storage);
     let r = r.clone();
     tokio::task::spawn_blocking(move || s.insert_result(&r))
@@ -139,6 +158,25 @@ impl Storage {
             conn.pragma_update(None, "user_version", 1)
                 .map_err(|e| e.to_string())?;
         }
+        // v2:网络诊断历史。设置项 save_diag_history 真实生效的依据。
+        if user_version < 2 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS diag_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target TEXT,
+                ok INTEGER NOT NULL DEFAULT 0,
+                summary TEXT NOT NULL DEFAULT '',
+                detail TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_diag_created ON diag_runs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_diag_kind ON diag_runs(kind, created_at DESC);",
+            )
+            .map_err(|e| e.to_string())?;
+            conn.pragma_update(None, "user_version", 2)
+                .map_err(|e| e.to_string())?;
+        }
         conn.pragma_update(None, "secure_delete", "ON")
             .map_err(|e| e.to_string())?;
         let sanitized = sanitize_legacy_ndt7_details(&conn)?;
@@ -154,7 +192,7 @@ impl Storage {
 
     pub fn insert_result(&self, r: &TestResult) -> Result<(), String> {
         let detail = serde_json::to_string(r).map_err(|e| e.to_string())?;
-        let conn = self.conn.lock().unwrap();
+        let conn = crate::safe_lock::lock(&self.conn);
         conn.execute(
             "INSERT INTO history (created_at, download_mbps, upload_mbps, idle_ping_ms, jitter_ms,
                 loaded_down_ms, loaded_up_ms, packet_loss_percent, server_name, server_provider,
@@ -200,7 +238,18 @@ impl Storage {
         order_desc: bool,
         limit: u32,
     ) -> Result<Vec<HistoryRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        self.list_history_page(from, to, order_desc, limit, None)
+    }
+
+    pub fn list_history_page(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+        order_desc: bool,
+        limit: u32,
+        cursor_id: Option<i64>,
+    ) -> Result<Vec<HistoryRow>, String> {
+        let conn = crate::safe_lock::lock(&self.conn);
         let mut sql = String::from(
             "SELECT id, created_at, download_mbps, upload_mbps, idle_ping_ms, jitter_ms,
                     loaded_down_ms, loaded_up_ms, packet_loss_percent, server_name,
@@ -215,6 +264,11 @@ impl Storage {
         if let Some(t) = &to {
             sql.push_str(&format!(" AND created_at <= ?{}", params.len() + 1));
             params.push(Box::new(t.clone()));
+        }
+        if let Some(cursor_id) = cursor_id {
+            let comparator = if order_desc { "<" } else { ">" };
+            sql.push_str(&format!(" AND id {comparator} ?{}", params.len() + 1));
+            params.push(Box::new(cursor_id));
         }
         sql.push_str(if order_desc {
             " ORDER BY id DESC LIMIT ?"
@@ -252,7 +306,7 @@ impl Storage {
     }
 
     pub fn get_result_detail(&self, id: i64) -> Result<Option<TestResult>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = crate::safe_lock::lock(&self.conn);
         let mut stmt = conn
             .prepare("SELECT detail FROM history WHERE id = ?1")
             .map_err(|e| e.to_string())?;
@@ -267,9 +321,7 @@ impl Storage {
     }
 
     pub fn delete_history(&self, id: i64) -> Result<(), String> {
-        self.conn
-            .lock()
-            .unwrap()
+        crate::safe_lock::lock(&self.conn)
             .execute("DELETE FROM history WHERE id = ?1", [id])
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -282,36 +334,155 @@ impl Storage {
         }
         let cutoff = chrono::Local::now() - chrono::Duration::days(days as i64);
         let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
-        let n = self
-            .conn
-            .lock()
-            .unwrap()
+        let n = crate::safe_lock::lock(&self.conn)
             .execute("DELETE FROM history WHERE created_at < ?1", [cutoff_str])
             .map_err(|e| e.to_string())?;
         Ok(n as u64)
     }
 
     pub fn clear_history(&self) -> Result<(), String> {
-        self.conn
-            .lock()
-            .unwrap()
+        crate::safe_lock::lock(&self.conn)
             .execute("DELETE FROM history", [])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub fn history_count(&self) -> Result<u32, String> {
-        self.conn
-            .lock()
-            .unwrap()
+        crate::safe_lock::lock(&self.conn)
             .query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))
             .map_err(|e| e.to_string())
+    }
+
+    /// 满足筛选条件的历史条数(与 `list_history` 同一 WHERE 口径)。
+    /// 用于前端区分"已加载 M 条"和"库内共 N 条",避免把窗口内统计当成全量。
+    pub fn history_count_filtered(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+    ) -> Result<u32, String> {
+        let conn = crate::safe_lock::lock(&self.conn);
+        let mut sql = String::from("SELECT COUNT(*) FROM history WHERE 1=1");
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        if let Some(f) = &from {
+            sql.push_str(&format!(" AND created_at >= ?{}", params.len() + 1));
+            params.push(Box::new(f.clone()));
+        }
+        if let Some(t) = &to {
+            sql.push_str(&format!(" AND created_at <= ?{}", params.len() + 1));
+            params.push(Box::new(t.clone()));
+        }
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        conn.query_row(&sql, refs.as_slice(), |r| r.get(0))
+            .map_err(|e| e.to_string())
+    }
+
+    // ---------- 网络诊断历史 ----------
+
+    /// 记录一次诊断。只有设置开启时调用方才会落库。
+    /// `detail` 保存完整结构化结果,列表只取摘要字段以免大字段拖慢渲染。
+    pub fn insert_diag_run(&self, run: &DiagRunInput<'_>) -> Result<i64, String> {
+        let conn = crate::safe_lock::lock(&self.conn);
+        conn.execute(
+            "INSERT INTO diag_runs (created_at, kind, target, ok, summary, detail)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params![
+                run.created_at,
+                run.kind,
+                run.target,
+                if run.ok { 1 } else { 0 },
+                run.summary,
+                run.detail,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_diag_runs(
+        &self,
+        kind: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<DiagRunRow>, String> {
+        let conn = crate::safe_lock::lock(&self.conn);
+        let limit = limit.clamp(1, 1000);
+        let mut out = Vec::new();
+        let map = |row: &rusqlite::Row<'_>| {
+            Ok(DiagRunRow {
+                id: row.get(0)?,
+                created_at: row.get(1)?,
+                kind: row.get(2)?,
+                target: row.get(3)?,
+                ok: row.get::<_, i64>(4)? != 0,
+                summary: row.get(5)?,
+            })
+        };
+        if let Some(k) = kind {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, created_at, kind, target, ok, summary FROM diag_runs
+                     WHERE kind = ?1 ORDER BY id DESC LIMIT ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params![k, limit], map)
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                out.push(r.map_err(|e| e.to_string())?);
+            }
+        } else {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, created_at, kind, target, ok, summary FROM diag_runs
+                     ORDER BY id DESC LIMIT ?1",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([limit], map).map_err(|e| e.to_string())?;
+            for r in rows {
+                out.push(r.map_err(|e| e.to_string())?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn diag_run_detail(&self, id: i64) -> Result<Option<String>, String> {
+        let conn = crate::safe_lock::lock(&self.conn);
+        let mut stmt = conn
+            .prepare("SELECT detail FROM diag_runs WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([id]).map_err(|e| e.to_string())?;
+        match rows.next().map_err(|e| e.to_string())? {
+            Some(row) => Ok(row.get::<_, Option<String>>(0).map_err(|e| e.to_string())?),
+            None => Ok(None),
+        }
+    }
+
+    pub fn clear_diag_runs(&self) -> Result<u64, String> {
+        let conn = crate::safe_lock::lock(&self.conn);
+        let n = conn
+            .execute("DELETE FROM diag_runs", [])
+            .map_err(|e| e.to_string())?;
+        Ok(n as u64)
+    }
+
+    /// 与历史保留策略共用清理(诊断记录不单独设保留期)
+    pub fn cleanup_diag_runs(&self, days: u32) -> Result<u64, String> {
+        if days == 0 {
+            return Ok(0);
+        }
+        let conn = crate::safe_lock::lock(&self.conn);
+        let n = conn
+            .execute(
+                "DELETE FROM diag_runs WHERE created_at < datetime('now','localtime',?1)",
+                rusqlite::params![format!("-{days} days")],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(n as u64)
     }
 
     // ---------- 节点收藏 ----------
 
     pub fn favorites_map(&self) -> HashMap<String, bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = crate::safe_lock::lock(&self.conn);
         let mut map = HashMap::new();
         if let Ok(mut stmt) = conn.prepare("SELECT url FROM favorite_servers") {
             if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
@@ -324,7 +495,7 @@ impl Storage {
     }
 
     pub fn set_favorite(&self, url: &str, name: &str, fav: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = crate::safe_lock::lock(&self.conn);
         if fav {
             conn.execute(
                 "INSERT OR REPLACE INTO favorite_servers (url, name, added_at) VALUES (?1, ?2, ?3)",
@@ -456,6 +627,83 @@ mod tests {
         assert_eq!(s.list_history(None, None, true, 100).unwrap().len(), 1);
         s.clear_history().unwrap();
         assert_eq!(s.history_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_history_pagination_preserves_order_and_filter() {
+        let s = mem_storage();
+        for _ in 0..5 {
+            s.insert_result(&sample_result("completed")).unwrap();
+        }
+        let all = s
+            .list_history_page(
+                Some("2026-11-01".into()),
+                Some("2026-11-30".into()),
+                true,
+                10,
+                None,
+            )
+            .unwrap();
+        let page1 = s
+            .list_history_page(
+                Some("2026-11-01".into()),
+                Some("2026-11-30".into()),
+                true,
+                2,
+                None,
+            )
+            .unwrap();
+        let page2 = s
+            .list_history_page(
+                Some("2026-11-01".into()),
+                Some("2026-11-30".into()),
+                true,
+                2,
+                page1.last().map(|row| row.id),
+            )
+            .unwrap();
+        let page3 = s
+            .list_history_page(
+                Some("2026-11-01".into()),
+                Some("2026-11-30".into()),
+                true,
+                2,
+                page2.last().map(|row| row.id),
+            )
+            .unwrap();
+        let joined: Vec<i64> = page1
+            .iter()
+            .chain(&page2)
+            .chain(&page3)
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(joined, all.iter().map(|row| row.id).collect::<Vec<_>>());
+        assert_eq!(all.len(), 5);
+        assert_eq!(page3.len(), 1);
+
+        let asc = s.list_history_page(None, None, false, 2, None).unwrap();
+        let asc_next = s
+            .list_history_page(None, None, false, 2, asc.last().map(|row| row.id))
+            .unwrap();
+        assert!(asc[0].id < asc[1].id);
+        assert!(asc_next[0].id > asc[1].id);
+
+        s.insert_result(&sample_result("completed")).unwrap();
+        let older_than_page1 = s
+            .list_history_page(None, None, true, 10, page1.last().map(|row| row.id))
+            .unwrap();
+        assert_eq!(older_than_page1.len(), 3, "分页游标不受新插入最新记录影响");
+        let mut disjoint = page1.iter().map(|row| row.id).collect::<Vec<_>>();
+        disjoint.extend(older_than_page1.iter().map(|row| row.id));
+        disjoint.sort_unstable();
+        disjoint.dedup();
+        assert_eq!(disjoint.len(), 5, "游标分页无重复且不漏掉已有旧记录");
+
+        s.delete_history(page1[1].id).unwrap();
+        let still_after_cursor = s
+            .list_history_page(None, None, true, 10, page1.last().map(|row| row.id))
+            .unwrap();
+        assert_eq!(still_after_cursor.len(), 3, "删除较新记录不移动游标边界");
     }
 
     #[test]

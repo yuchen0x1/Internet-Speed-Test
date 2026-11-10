@@ -37,7 +37,7 @@ pub fn node_id(base_url: &str, name: &str) -> String {
 
 /// 生成不可压缩的随机数据块(上传测速需真实随机数据,避免传输层优化干扰)
 pub fn random_block(len: usize) -> Vec<u8> {
-    use rand::{Rng, rng};
+    use rand::{rng, Rng};
     let mut buf = vec![0u8; len];
     rng().fill_bytes(&mut buf);
     buf
@@ -73,7 +73,10 @@ mod tests {
             extract_host("https://lon.speedtest.clouvider.net/backend/empty.php"),
             Some("lon.speedtest.clouvider.net".into())
         );
-        assert_eq!(extract_host("https://speed.cloudflare.com/__down"), Some("speed.cloudflare.com".into()));
+        assert_eq!(
+            extract_host("https://speed.cloudflare.com/__down"),
+            Some("speed.cloudflare.com".into())
+        );
     }
 
     #[test]

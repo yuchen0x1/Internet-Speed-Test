@@ -1,7 +1,11 @@
 // 通用 UI 原语:模态框、Toast 容器、确认对话框、分段控件
-import React, { useEffect } from "react";
+import React, { useEffect, useId, useRef } from "react";
 import { useApp } from "../store/app";
 import { Icon } from "./Icon";
+
+/** 可聚焦元素选择器(焦点陷阱用) */
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 export function Modal(props: {
   title: string;
@@ -10,20 +14,70 @@ export function Modal(props: {
   footer?: React.ReactNode;
   width?: number;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
   useEffect(() => {
+    // 打开时记住来源焦点,关闭时归还 —— 键盘用户不应被扔回文档开头
+    const restoreTo = document.activeElement as HTMLElement | null;
+    const node = dialogRef.current;
+    // 焦点移入对话框:优先第一个可聚焦元素,否则对话框本身
+    const first = node?.querySelector<HTMLElement>(FOCUSABLE);
+    (first ?? node)?.focus();
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") props.onClose();
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        props.onClose();
+        return;
+      }
+      // Tab 焦点陷阱:焦点不得逃逸到背后的页面
+      if (e.key !== "Tab" || !node) return;
+      const items = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => el.offsetParent !== null,
+      );
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      const active = document.activeElement;
+      if (!e.shiftKey && active === lastItem) {
+        e.preventDefault();
+        firstItem.focus();
+      } else if (e.shiftKey && (active === firstItem || active === node)) {
+        e.preventDefault();
+        lastItem.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      restoreTo?.focus?.();
+    };
+    // props.onClose 变化不应重装(会导致焦点反复重置)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div className="modal" style={props.width ? { width: `min(${props.width}px, calc(100vw - 80px))` } : undefined}>
+    <div
+      className="modal-mask"
+      onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}
+    >
+      <div
+        className="modal"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        style={props.width ? { width: `min(${props.width}px, calc(100vw - 80px))` } : undefined}
+      >
         <div className="row mb16">
-          <h3 style={{ margin: 0, fontSize: 16 }}>{props.title}</h3>
+          <h3 id={titleId} style={{ margin: 0, fontSize: 16 }}>{props.title}</h3>
           <div className="grow" />
-          <button className="btn ghost sm" onClick={props.onClose} aria-label="关闭">
+          <button className="btn ghost sm" onClick={props.onClose} aria-label="关闭对话框">
             <Icon name="close" size={16} />
           </button>
         </div>

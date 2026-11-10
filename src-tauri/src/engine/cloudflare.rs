@@ -13,7 +13,9 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use super::adapter::{cache_buster, measure_http_rtt, PhaseConfig, ProviderAdapter, ThroughputCounters};
+use super::adapter::{
+    cache_buster, measure_http_rtt, PhaseConfig, ProviderAdapter, ThroughputCounters,
+};
 use super::model::ServerNodeInfo;
 
 const UPLOAD_CHUNK_INITIAL: usize = 8 * 1024 * 1024;
@@ -60,7 +62,7 @@ pub fn builtin_node() -> ServerNodeInfo {
     ServerNodeInfo {
         id: super::util::node_id(CLOUDFLARE_BASE, "Cloudflare 全球边缘网络"),
         name: "Cloudflare 全球边缘网络".into(),
-        provider: "cloudflare".into(),
+        provider: super::model::PROVIDER_CLOUDFLARE.into(),
         base_url: CLOUDFLARE_BASE.into(),
         dl_url: "__down".into(),
         ul_url: "__up".into(),
@@ -77,11 +79,7 @@ pub fn builtin_node() -> ServerNodeInfo {
 #[async_trait]
 impl ProviderAdapter for CloudflareAdapter {
     fn provider(&self) -> &'static str {
-        "cloudflare"
-    }
-
-    fn client(&self) -> &reqwest::Client {
-        &self.client
+        super::model::PROVIDER_CLOUDFLARE
     }
 
     async fn ping_rtt(
@@ -89,7 +87,12 @@ impl ProviderAdapter for CloudflareAdapter {
         _node: &ServerNodeInfo,
         token: &CancellationToken,
     ) -> Result<f64, String> {
-        measure_http_rtt(&self.client, &format!("{CLOUDFLARE_BASE}/__down?bytes=0"), token).await
+        measure_http_rtt(
+            &self.client,
+            &format!("{CLOUDFLARE_BASE}/__down?bytes=0"),
+            token,
+        )
+        .await
     }
 
     async fn run_download(
@@ -111,7 +114,12 @@ impl ProviderAdapter for CloudflareAdapter {
                         "{CLOUDFLARE_BASE}/__down?bytes={DL_CHUNK_BYTES}&_x={}",
                         cache_buster()
                     );
-                    let resp = match client.get(&url).timeout(Duration::from_secs(30)).send().await {
+                    let resp = match client
+                        .get(&url)
+                        .timeout(Duration::from_secs(30))
+                        .send()
+                        .await
+                    {
                         Ok(r) if r.status().is_success() => r,
                         _ => {
                             counters.add_failure();
@@ -119,7 +127,7 @@ impl ProviderAdapter for CloudflareAdapter {
                             continue;
                         }
                     };
-                    let mut stream = resp.bytes_stream();
+                    let stream = resp.bytes_stream();
                     futures_util::pin_mut!(stream);
                     let mut pinned = std::pin::Pin::as_mut(&mut stream);
                     while let Some(item) = tokio::select! {

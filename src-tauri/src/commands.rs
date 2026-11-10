@@ -1,5 +1,6 @@
 //! Tauri 命令层:前端唯一入口。所有业务在引擎/诊断/存储层完成,本层仅做编排与授权检查。
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +32,8 @@ pub struct AppInfo {
     pub version: String,
     pub os: String,
     pub data_dir: String,
+    /// 设置文件完整路径(关于页展示,便于用户排查/备份)
+    pub settings_path: String,
 }
 
 /// 诊断命令统一错误结构:code 供前端分支判断,message 直接展示。
@@ -78,6 +81,7 @@ pub fn get_app_info(state: tauri::State<AppState>) -> AppInfo {
         version: env!("CARGO_PKG_VERSION").into(),
         os: std::env::consts::OS.to_string(),
         data_dir: state.data_dir.display().to_string(),
+        settings_path: state.settings.path().display().to_string(),
     }
 }
 
@@ -133,9 +137,12 @@ pub async fn set_settings(
         let storage = state.storage.clone();
         let connected_getter: Arc<dyn Fn() -> bool + Send + Sync> =
             Arc::new(|| crate::diagnostics::current_net_status().connected);
-        state
-            .prometheus
-            .apply(s.prometheus_enabled, s.prometheus_port, storage, connected_getter);
+        state.prometheus.apply(
+            s.prometheus_enabled,
+            s.prometheus_port,
+            storage,
+            connected_getter,
+        );
     }
     Ok(())
 }
@@ -145,21 +152,30 @@ pub fn get_network_status() -> diagnostics::NetStatus {
     diagnostics::current_net_status()
 }
 
+/// Prometheus 端点的真实监听状态。
+/// 设置里的开关只表示"用户想要开启",端口可能已被占用;
+/// 设置页必须依据本命令区分"已开启"和"开启失败"。
+#[tauri::command]
+pub async fn prometheus_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::prometheus::PrometheusStatus, String> {
+    Ok(state.prometheus.status())
+}
+
 // ============================================================
 // 测速节点
 // ============================================================
 
 #[tauri::command]
-pub async fn servers_list(state: tauri::State<'_, AppState>) -> Result<Vec<ServerNodeInfo>, String> {
+pub async fn servers_list(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ServerNodeInfo>, String> {
     let settings = state.settings.settings.read().await;
     let favorites = state.storage.favorites_map();
     let engine = state.engine.clone();
     let custom = settings.custom_nodes.clone();
     drop(settings);
-    Ok(engine
-        .registry()
-        .list_servers(&custom, &favorites)
-        .await)
+    Ok(engine.registry().list_servers(&custom, &favorites).await)
 }
 
 /// 刷新节点:重新拉列表 + 并发探测全部节点(返回含延迟与可用性)
@@ -280,9 +296,11 @@ pub async fn speedtest_start(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let settings = state.settings.settings.read().await.clone();
-    state
-        .engine
-        .start(crate::engine::EventSink::App(app), settings, state.storage.clone())
+    state.engine.start(
+        crate::engine::EventSink::App(app),
+        settings,
+        state.storage.clone(),
+    )
 }
 
 #[tauri::command]
@@ -293,6 +311,13 @@ pub fn speedtest_stop(state: tauri::State<AppState>) {
 #[tauri::command]
 pub fn speedtest_running(state: tauri::State<AppState>) -> bool {
     state.engine.is_running()
+}
+
+/// 引擎当前阶段(与 speedtest_running 配套用于前端状态对账)。
+/// 托盘可直接启动测速,窗口重载也会丢失事件,前端需要能读到真实阶段。
+#[tauri::command]
+pub fn speedtest_phase(state: tauri::State<AppState>) -> String {
+    state.engine.current_phase().as_str().to_string()
 }
 
 /// 国内外知名测速服务官网白名单(仅 HTTPS 固定入口;未知服务一律拒绝,不接受任意 URL)
@@ -341,13 +366,32 @@ pub async fn history_list(
     to: Option<String>,
     desc: Option<bool>,
     limit: Option<u32>,
+    cursor_id: Option<i64>,
 ) -> Result<Vec<HistoryRow>, String> {
     let storage = state.storage.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        storage.list_history(from, to, desc.unwrap_or(true), limit.unwrap_or(500))
+        storage.list_history_page(
+            from,
+            to,
+            desc.unwrap_or(true),
+            limit.unwrap_or(500),
+            cursor_id,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn history_count(
+    state: tauri::State<'_, AppState>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<u32, String> {
+    let storage = state.storage.clone();
+    tauri::async_runtime::spawn_blocking(move || storage.history_count_filtered(from, to))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -387,7 +431,7 @@ pub async fn history_export(
     let storage = state.storage.clone();
     let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
         let rows = storage.list_history(None, None, true, 5000)?;
-        let total = storage.history_count()? as u32;
+        let total = storage.history_count()?;
         Ok::<_, String>((rows, total))
     })
     .await
@@ -403,7 +447,11 @@ pub async fn history_export(
         ),
         "json" => {
             let json = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
-            (json, "netvision_history.json".to_string(), vec![("JSON 文件", &["json"][..])])
+            (
+                json,
+                "netvision_history.json".to_string(),
+                vec![("JSON 文件", &["json"][..])],
+            )
         }
         _ => return Err("不支持的导出格式".into()),
     };
@@ -411,7 +459,7 @@ pub async fn history_export(
     std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
     Ok(ExportOutcome {
         path,
-        exported: rows.len() as u32,
+        exported: rows.len().min(u32::MAX as usize) as u32,
         total,
     })
 }
@@ -448,7 +496,7 @@ async fn save_via_dialog(
         .set_file_name(default_name)
         .add_filter(filters[0].0, filters[0].1);
     for (name, exts) in filters.iter().skip(1) {
-        builder = builder.add_filter(*name, *exts);
+        builder = builder.add_filter(*name, exts);
     }
     builder.save_file(move |file| {
         let _ = tx.send(file);
@@ -480,23 +528,25 @@ fn to_csv(rows: &[HistoryRow]) -> String {
         "测试时间,下载 Mbps,上传 Mbps,空闲延迟 ms,抖动 ms,下载负载延迟 ms,上传负载延迟 ms,丢包率 %,节点,提供商,网络类型,接口,公网 IP,ISP,状态\n",
     );
     for r in rows {
+        // 所有字符串字段统一过 csv_field:转义 + 中和公式注入。
+        // 节点名来自远端节点列表,ISP/IP 来自网络侧,都不能当作可信文本直接拼接。
         out.push_str(&format!(
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            r.created_at,
+            csv_field(&r.created_at),
             fmt2(r.download_mbps),
-            r.upload_mbps.map_or_else(String::new, |v| fmt2(v)),
+            r.upload_mbps.map_or_else(String::new, fmt2),
             fmt2(r.idle_ping_ms),
             fmt2(r.jitter_ms),
-            r.loaded_down_ms.map_or_else(String::new, |v| fmt2(v)),
-            r.loaded_up_ms.map_or_else(String::new, |v| fmt2(v)),
-            r.packet_loss_percent.map_or_else(String::new, |v| fmt2(v)),
-            csv_escape(&r.server_name),
-            csv_escape(&r.server_provider),
-            csv_escape(&r.network_type),
-            csv_escape(&r.interface_name),
-            r.public_ip.clone().unwrap_or_default(),
-            r.isp.clone().unwrap_or_default(),
-            r.status,
+            r.loaded_down_ms.map_or_else(String::new, fmt2),
+            r.loaded_up_ms.map_or_else(String::new, fmt2),
+            r.packet_loss_percent.map_or_else(String::new, fmt2),
+            csv_field(&r.server_name),
+            csv_field(&r.server_provider),
+            csv_field(&r.network_type),
+            csv_field(&r.interface_name),
+            csv_field(r.public_ip.as_deref().unwrap_or_default()),
+            csv_field(r.isp.as_deref().unwrap_or_default()),
+            csv_field(&r.status),
         ));
     }
     out
@@ -506,8 +556,26 @@ fn fmt2(v: f64) -> String {
     format!("{v:.2}")
 }
 
+/// 表格软件会把以 = + - @ 开头的单元格当公式执行,导出前加前导单引号中和。
+/// 前导空白后跟公式前缀也中和;数值字段走 `fmt2`,不会误伤合法负数。
+fn neutralize_formula(s: &str) -> Cow<'_, str> {
+    let starts_with_formula = matches!(s.trim_start().chars().next(), Some('=' | '+' | '-' | '@'));
+    let starts_with_control = matches!(s.chars().next(), Some('\t' | '\r' | '\n'));
+    if starts_with_formula || starts_with_control {
+        Cow::Owned(format!("'{s}"))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// CSV 字段:先中和公式注入,再按 RFC 4180 决定是否加引号。
+fn csv_field(s: &str) -> String {
+    let neutralized = neutralize_formula(s);
+    csv_escape(&neutralized)
+}
+
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -537,7 +605,10 @@ pub async fn monitor_set_paused(
 }
 
 #[tauri::command]
-pub fn monitor_history(state: tauri::State<AppState>, window_secs: u32) -> Vec<crate::monitor::MonitorTick> {
+pub fn monitor_history(
+    state: tauri::State<AppState>,
+    window_secs: u32,
+) -> Vec<crate::monitor::MonitorTick> {
     state.monitor.history(window_secs)
 }
 
@@ -546,9 +617,81 @@ pub fn monitor_latest(state: tauri::State<AppState>) -> Option<crate::monitor::M
     state.monitor.latest()
 }
 
+/// 监控是否被暂停:前端页面重挂载后需要恢复真实暂停态,不能默认成"未暂停"
+#[tauri::command]
+pub fn monitor_paused(state: tauri::State<AppState>) -> bool {
+    state.monitor.is_paused()
+}
+
 // ============================================================
 // 网络诊断
 // ============================================================
+
+/// 诊断结果落库(仅当设置 save_diag_history 开启)。
+/// 失败不向调用方传播:诊断本身已经成功,记录历史不该打断用户操作。
+async fn record_diag(
+    state: &tauri::State<'_, AppState>,
+    kind: &str,
+    target: Option<&str>,
+    ok: bool,
+    summary: String,
+    detail: Option<String>,
+) {
+    if !state.settings.settings.read().await.save_diag_history {
+        return;
+    }
+    let storage = state.storage.clone();
+    let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let kind = kind.to_string();
+    let target = target.map(|s| s.to_string());
+    let res = tokio::task::spawn_blocking(move || {
+        storage.insert_diag_run(&crate::storage::DiagRunInput {
+            created_at: &created_at,
+            kind: &kind,
+            target: target.as_deref(),
+            ok,
+            summary: &summary,
+            detail: detail.as_deref(),
+        })
+    })
+    .await;
+    if let Ok(Err(e)) = res {
+        log::warn!("诊断历史写入失败: {e}");
+    }
+}
+
+#[tauri::command]
+pub async fn diag_history_list(
+    state: tauri::State<'_, AppState>,
+    kind: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<crate::storage::DiagRunRow>, String> {
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        storage.list_diag_runs(kind.as_deref(), limit.unwrap_or(200))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn diag_history_detail(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Option<String>, String> {
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || storage.diag_run_detail(id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn diag_history_clear(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || storage.clear_diag_runs())
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 #[tauri::command]
 pub fn diag_local_network() -> Result<diagnostics::LocalNetInfo, CommandError> {
@@ -634,6 +777,7 @@ pub async fn diag_https_test() -> Result<Vec<diagnostics::HttpsResult>, CommandE
 #[tauri::command]
 pub async fn diag_traceroute(
     app: AppHandle,
+    state: tauri::State<'_, AppState>,
     host: String,
     max_hops: Option<u32>,
 ) -> Result<Vec<crate::engine::quality::TraceHop>, CommandError> {
@@ -642,26 +786,66 @@ pub async fn diag_traceroute(
     for h in &hops {
         let _ = app.emit("diag://trace", h);
     }
+    // 路由追踪可能被目标/中间设备屏蔽:如实记录条数,不判断成败
+    let summary = format!(
+        "{} 跳 · 末跳 {}",
+        hops.len(),
+        hops.iter()
+            .rev()
+            .find_map(|h| h.ip.clone())
+            .unwrap_or_else(|| "*".into())
+    );
+    record_diag(
+        &state,
+        "traceroute",
+        Some(&host),
+        !hops.is_empty(),
+        summary,
+        serde_json::to_string(&hops).ok(),
+    )
+    .await;
     Ok(hops)
 }
 
 #[tauri::command]
 pub async fn diag_ping_test(
+    state: tauri::State<'_, AppState>,
     host: String,
     count: Option<u32>,
 ) -> Result<PingReport, CommandError> {
     let count = count.unwrap_or(8).clamp(2, 30);
     let out = diagnostics::icmp_ping(&host, count, 1500).await;
-    Ok(PingReport {
-        host,
+    let report = PingReport {
+        host: host.clone(),
         sent: count,
         loss_percent: out.loss_percent,
-        rtts_ms: out.rtts_ms,
+        rtts_ms: out.rtts_ms.clone(),
         avg_ms: out.avg_ms,
-    })
+    };
+    let summary = format!(
+        "{} 包 / 丢包 {} / 平均 {} ms",
+        count,
+        out.loss_percent
+            .map(|l| format!("{l:.0}%"))
+            .unwrap_or_else(|| "未知".into()),
+        out.avg_ms
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "—".into())
+    );
+    let ok = out.loss_percent.is_some_and(|l| l < 100.0);
+    record_diag(
+        &state,
+        "ping",
+        Some(&host),
+        ok,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PingReport {
     pub host: String,
     pub sent: u32,
@@ -680,17 +864,58 @@ pub async fn diag_ipv6_check(
 
 #[tauri::command]
 pub async fn diag_route_quality(
+    state: tauri::State<'_, AppState>,
     host: String,
     max_hops: Option<u32>,
     probes: Option<u32>,
 ) -> Result<diagnostics::RouteQualityReport, CommandError> {
-    diagnostics::route_quality(&host, max_hops.unwrap_or(12), probes.unwrap_or(6))
+    let report = diagnostics::route_quality(&host, max_hops.unwrap_or(12), probes.unwrap_or(6))
         .await
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+    let summary = if report.hops.is_empty() {
+        "未获得任何跳点".to_string()
+    } else {
+        // 取末端有效跳点的延迟/丢包作为摘要,便于列表快速判断链路质量
+        let last = report
+            .hops
+            .iter()
+            .rev()
+            .find(|h| h.avg_ms.is_some() || h.loss_percent.is_some());
+        match last {
+            Some(h) => format!(
+                "{} 跳 · 第 {} 跳 {} / 丢包 {} / 平均 {} ms",
+                report.hops.len(),
+                h.hop,
+                h.ip.clone().unwrap_or_else(|| "*".into()),
+                h.loss_percent
+                    .map(|v| format!("{v:.0}%"))
+                    .unwrap_or_else(|| "未知".into()),
+                h.avg_ms
+                    .map(|v| format!("{v:.1}"))
+                    .unwrap_or_else(|| "—".into())
+            ),
+            None => format!("{} 跳 · 全部超时", report.hops.len()),
+        }
+    };
+    let ok = report
+        .hops
+        .iter()
+        .any(|h| h.loss_percent.is_some_and(|l| l < 100.0));
+    record_diag(
+        &state,
+        "route_quality",
+        Some(&host),
+        ok,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 #[tauri::command]
 pub async fn diag_dns_consistency(
+    state: tauri::State<'_, AppState>,
     domain: String,
 ) -> Result<diagnostics::DnsConsistencyReport, CommandError> {
     let domain = domain.trim().to_string();
@@ -700,17 +925,56 @@ pub async fn diag_dns_consistency(
     if !diagnostics::valid_host(&domain) {
         return Err(CommandError::new("invalid_host", "无效的域名"));
     }
-    Ok(diagnostics::dns_consistency(&domain).await)
+    let report = diagnostics::dns_consistency(&domain).await;
+    let ok = report.verdict != "可疑劫持" && report.verdict != "异常";
+    let summary = format!(
+        "{} · {} 个解析器{}{}",
+        report.verdict,
+        report.entries.len(),
+        if report.note.is_some() { " · " } else { "" },
+        report.note.clone().unwrap_or_default()
+    );
+    record_diag(
+        &state,
+        "dns_consistency",
+        Some(&domain),
+        ok,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 #[tauri::command]
-pub async fn diag_nat_type() -> Result<diagnostics::NatReport, CommandError> {
-    Ok(diagnostics::nat_type().await)
+pub async fn diag_nat_type(
+    state: tauri::State<'_, AppState>,
+) -> Result<diagnostics::NatReport, CommandError> {
+    let report = diagnostics::nat_type().await;
+    let ok = report.nat_type != "未知";
+    let summary = format!(
+        "{}{}",
+        report.nat_type,
+        report
+            .note
+            .as_ref()
+            .map(|n| format!(" · {n}"))
+            .unwrap_or_default()
+    );
+    record_diag(
+        &state,
+        "nat",
+        None,
+        ok,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 #[tauri::command]
-pub async fn diag_connectivity_grid(
-) -> Result<Vec<diagnostics::ConnectivityEntry>, CommandError> {
+pub async fn diag_connectivity_grid() -> Result<Vec<diagnostics::ConnectivityEntry>, CommandError> {
     Ok(diagnostics::connectivity_grid().await)
 }
 
@@ -755,7 +1019,9 @@ pub fn batchtest_running(state: tauri::State<AppState>) -> bool {
 }
 
 #[tauri::command]
-pub async fn dns_distribution(domain: String) -> Result<crate::batchtest::DnsDistributionReport, String> {
+pub async fn dns_distribution(
+    domain: String,
+) -> Result<crate::batchtest::DnsDistributionReport, String> {
     crate::batchtest::dns_distribution(&domain).await
 }
 
@@ -763,19 +1029,26 @@ pub async fn dns_distribution(domain: String) -> Result<crate::batchtest::DnsDis
 #[tauri::command]
 pub fn copy_result_text(result: crate::engine::model::TestResult) -> Result<String, String> {
     let mut s = String::new();
+    s.push_str(&format!("NetVision Pro 测速结果({})\n", result.started_at));
     s.push_str(&format!(
-        "NetVision Pro 测速结果({})\n",
-        result.started_at
+        "↓ 下载:{:.2} Mbps(峰值 {:.1})\n",
+        result.download_mbps, result.download_peak_mbps
     ));
-    s.push_str(&format!("↓ 下载:{:.2} Mbps(峰值 {:.1})\n", result.download_mbps, result.download_peak_mbps));
     if let Some(up) = result.upload_mbps {
-        s.push_str(&format!("↑ 上传:{:.2} Mbps(峰值 {:.1})\n", up, result.upload_peak_mbps.unwrap_or(0.0)));
+        s.push_str(&format!(
+            "↑ 上传:{:.2} Mbps(峰值 {:.1})\n",
+            up,
+            result.upload_peak_mbps.unwrap_or(0.0)
+        ));
     }
     s.push_str(&format!(
         "延迟:{:.1} ms / 抖动:{:.1} ms / 丢包:{}\n",
         result.idle_ping_ms,
         result.jitter_ms,
-        result.packet_loss_percent.map(|l| format!("{:.1}%", l)).unwrap_or_else(|| "未知".into())
+        result
+            .packet_loss_percent
+            .map(|l| format!("{:.1}%", l))
+            .unwrap_or_else(|| "未知".into())
     ));
     if let Some(q) = &result.quality {
         s.push_str(&format!("质量:{}({}/100)\n", q.rating, q.score));
@@ -800,11 +1073,61 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_field_neutralizes_formula_injection() {
+        // 远端节点名/ISP 属于不可信文本,表格软件不得把 = + - @ 当公式执行
+        assert_eq!(csv_field("=cmd|calc"), "'=cmd|calc");
+        assert_eq!(csv_field("+1+1"), "'+1+1");
+        assert_eq!(csv_field("-1+1"), "'-1+1");
+        assert_eq!(csv_field("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(csv_field("  =SUM(A1)"), "'  =SUM(A1)");
+        assert_eq!(csv_field("\t=SUM(A1)"), "'\t=SUM(A1)");
+        // 正常文本不受影响
+        assert_eq!(csv_field("China Mobile"), "China Mobile");
+        // 公式前缀 + 逗号:先中和再加引号
+        assert_eq!(csv_field("=a,b"), "\"'=a,b\"");
+        // 空值安全
+        assert_eq!(csv_field(""), "");
+    }
+
+    #[test]
+    fn test_to_csv_escapes_comma_bearing_isp() {
+        let row = HistoryRow {
+            id: 1,
+            created_at: "2026-11-10 12:00:00".into(),
+            download_mbps: 100.0,
+            upload_mbps: Some(50.0),
+            idle_ping_ms: 10.0,
+            jitter_ms: 1.0,
+            loaded_down_ms: Some(12.0),
+            loaded_up_ms: Some(11.0),
+            packet_loss_percent: Some(0.0),
+            server_name: "Tokyo, Japan (Example)".into(),
+            server_provider: "librespeed".into(),
+            server_url: "https://example.com".into(),
+            network_type: "ethernet".into(),
+            interface_name: "Ethernet".into(),
+            public_ip: Some("203.0.113.9".into()),
+            isp: Some("China Mobile Communications Group Co., Ltd.".into()),
+            status: "completed".into(),
+        };
+        let csv = to_csv(&[row]);
+        let data_line = csv.lines().nth(1).unwrap();
+        // ISP 含逗号必须被引号包裹,否则整行列数错乱
+        assert!(data_line.contains("\"China Mobile Communications Group Co., Ltd.\""));
+        assert!(data_line.contains("\"Tokyo, Japan (Example)\""));
+    }
+
+    #[test]
     fn test_speedtest_service_whitelist() {
         // 已知服务均返回 HTTPS 固定入口
         for id in [
-            "speedtest_cn", "ookla", "fast", "cloudflare",
-            "telecom_gd", "unicom", "mobile_bj",
+            "speedtest_cn",
+            "ookla",
+            "fast",
+            "cloudflare",
+            "telecom_gd",
+            "unicom",
+            "mobile_bj",
         ] {
             let url = speedtest_service_url(id).unwrap_or_else(|| panic!("缺少服务 {id}"));
             assert!(url.starts_with("https://"), "服务 {id} 未强制 HTTPS");

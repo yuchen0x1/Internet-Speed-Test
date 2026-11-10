@@ -1,7 +1,7 @@
 // IPC 错误规范化契约:诊断命令的 { code, message } 经 invoke 包装后保留错误码
 import { describe, expect, it, vi } from "vitest";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { AppInvokeError, errMsg, invoke } from "./api";
+import { api, AppInvokeError, errMsg, invoke } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -31,6 +31,36 @@ describe("invoke 错误规范化", () => {
     const e = (await invoke("diag_nat_type").catch((err) => err)) as AppInvokeError;
     expect(e.code).toBe("failed");
     expect(e.message).toBe("只有消息");
+  });
+});
+
+describe("historyList pagination", () => {
+  it("passes filter, order, limit, and cursor to the history IPC", async () => {
+    mockInvoke.mockResolvedValueOnce([]);
+
+    await api.historyList({ from: "2026-11-01", to: "2026-11-10", desc: false, limit: 100, cursorId: 200 });
+
+    expect(mockInvoke).toHaveBeenCalledWith("history_list", {
+      from: "2026-11-01",
+      to: "2026-11-10",
+      desc: false,
+      limit: 100,
+      cursorId: 200,
+    });
+  });
+
+  it("defaults omitted cursor to null", async () => {
+    mockInvoke.mockResolvedValueOnce([]);
+
+    await api.historyList();
+
+    expect(mockInvoke).toHaveBeenCalledWith("history_list", {
+      from: null,
+      to: null,
+      desc: true,
+      limit: 500,
+      cursorId: null,
+    });
   });
 });
 

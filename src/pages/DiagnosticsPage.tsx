@@ -5,9 +5,18 @@ import { useApp } from "../store/app";
 import { useDiag } from "../store/diag";
 import { useDiagTask } from "../lib/useDiagTask";
 import { Icon, type IconName } from "../components/Icon";
-import type { IfaceInfo, WifiDetails } from "../types";
+import { Modal } from "../components/ui";
+import type { DiagRunRow, IfaceInfo, WifiDetails } from "../types";
 
 type Status = "ok" | "err" | "warn" | "unknown" | "running";
+
+const KIND_LABEL: Record<string, string> = {
+  ping: "Ping",
+  traceroute: "路由追踪",
+  route_quality: "路由质量",
+  dns_consistency: "DNS 一致性",
+  nat: "NAT 类型",
+};
 
 function Dot({ s }: { s: Status }) {
   const cls = s === "running" ? "warn pulse" : s;
@@ -337,8 +346,143 @@ export function DiagnosticsPage() {
         {trace && trace.length === 0 && <div className="empty">未能解析出任何路由跳点(可能被防火墙拦截)</div>}
         {!trace && !traceRun && <div className="faint mt8" style={{ fontSize: 11.5 }}>追踪使用系统 tracert,目标不可达时对应跳显示为超时。</div>}
       </div>
+
+      <DiagHistoryPanel />
     </div>
   );
+}
+
+/** 诊断历史:仅在设置里开启"保存诊断历史"时才有记录,如实标注数据来源 */
+function DiagHistoryPanel() {
+  const [rows, setRows] = React.useState<DiagRunRow[] | null>(null);
+  const [kind, setKind] = React.useState("");
+  const [open, setOpen] = React.useState(false);
+  const [detail, setDetail] = React.useState<{ row: DiagRunRow; json: string } | null>(null);
+  const loadSeq = React.useRef(0);
+  const toast = useApp((s) => s.toast);
+  const saveEnabled = useApp((s) => s.settings?.save_diag_history ?? false);
+
+  const load = React.useCallback(async () => {
+    const seq = ++loadSeq.current;
+    setRows(null);
+    try {
+      const next = await api.diagHistoryList({ kind: kind || undefined, limit: 100 });
+      if (seq === loadSeq.current) setRows(next);
+    } catch (e) {
+      if (seq !== loadSeq.current) return;
+      toast("error", `诊断历史加载失败:${errMsg(e)}`);
+      setRows([]);
+    }
+  }, [kind, toast]);
+
+  React.useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+
+  return (
+    <div className="card pad mt16">
+      <div className="row">
+        <div className="chart-title grow" style={{ margin: 0 }}>
+          <Icon name="history" size={15} /> 诊断历史
+          {rows && rows.length > 0 && <span className="faint" style={{ fontWeight: 400 }}> · {rows.length} 条</span>}
+        </div>
+        <button className="btn sm" onClick={() => setOpen((v) => !v)}>
+          <Icon name={open ? "close" : "history"} size={13} /> {open ? "收起" : "查看记录"}
+        </button>
+        {open && rows && rows.length > 0 && (
+          <button className="btn sm danger" onClick={async () => {
+            try {
+              const n = await api.diagHistoryClear();
+              toast("success", `已清除 ${n} 条诊断记录`);
+              load();
+            } catch (e) {
+              toast("error", String(e));
+            }
+          }}><Icon name="trash" size={13} /> 清空</button>
+        )}
+      </div>
+
+      {!saveEnabled && (
+        <div className="faint mt8" style={{ fontSize: 11.5 }}>
+          当前设置未开启"保存诊断历史";在设置页开启后,新执行的诊断才会记录到本地。
+        </div>
+      )}
+
+      {open && (
+        <>
+          {rows === null && <div className="empty">加载中…</div>}
+          {rows !== null && rows.length === 0 && (
+            <div className="empty">{saveEnabled ? "暂无诊断记录 —— 执行一次检测后自动保存" : "暂无记录(保存诊断历史未开启)"}</div>
+          )}
+          {rows !== null && (
+            <div className="row gap8 mt12 wrap">
+              <label className="dim" htmlFor="diag-history-kind" style={{ fontSize: 12 }}>类型筛选</label>
+              <select
+                id="diag-history-kind"
+                className="select"
+                value={kind}
+                onChange={(e) => setKind(e.target.value)}
+                aria-label="按诊断类型筛选历史"
+              >
+                <option value="">全部类型</option>
+                {Object.entries(KIND_LABEL).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {rows !== null && rows.length > 0 && (
+            <div className="table-wrap mt12" style={{ maxHeight: 320, overflowY: "auto" }}>
+              <table className="table">
+                <thead><tr><th>时间</th><th>类型</th><th>目标</th><th>结果</th><th>摘要</th><th /></tr></thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.id}>
+                      <td className="num">{r.created_at}</td>
+                      <td>{KIND_LABEL[r.kind] ?? r.kind}</td>
+                      <td className="num">{r.target ?? "—"}</td>
+                      <td>{r.ok ? <span className="chip green">正常</span> : <span className="chip red">异常</span>}</td>
+                      <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.summary}>{r.summary}</td>
+                      <td>
+                        <button className="btn ghost sm" onClick={async () => {
+                          try {
+                            const json = await api.diagHistoryDetail(r.id);
+                            if (json) setDetail({ row: r, json });
+                            else toast("warn", "该记录的详情不存在");
+                          } catch (e) {
+                            toast("error", `详情加载失败:${errMsg(e)}`);
+                          }
+                        }}>详情</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {detail && (
+        <Modal title={`${KIND_LABEL[detail.row.kind] ?? detail.row.kind} · ${detail.row.created_at}`} onClose={() => setDetail(null)} width={720}>
+          <pre style={{
+            margin: 0, fontSize: 11.5, lineHeight: 1.6, maxHeight: 420, overflow: "auto",
+            background: "rgba(5,8,16,.5)", padding: 12, borderRadius: 10,
+            whiteSpace: "pre-wrap", wordBreak: "break-all",
+          }}>{prettyJson(detail.json)}</pre>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** detail 是后端保存的 JSON 文本;解析失败时原样展示,不隐藏内容 */
+function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 function IfaceView({ i, wifi, compact }: { i: IfaceInfo; wifi: WifiDetails | null; compact?: boolean }) {

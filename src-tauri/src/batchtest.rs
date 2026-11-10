@@ -11,16 +11,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics;
 
+#[derive(Default)]
 struct BatchInner {
     /// 单调递增代次:区分"本次任务自然结束的清理"与"已被新任务接管"
     gen: u64,
     token: Option<CancellationToken>,
-}
-
-impl Default for BatchInner {
-    fn default() -> Self {
-        Self { gen: 0, token: None }
-    }
 }
 
 #[derive(Default)]
@@ -84,7 +79,7 @@ impl BatchTestState {
             return Err("没有有效的目标主机".into());
         }
         let (token, my_gen) = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = crate::safe_lock::lock(&self.inner);
             if let Some(t) = inner.token.take() {
                 t.cancel();
             }
@@ -111,7 +106,10 @@ impl BatchTestState {
                         samples.push(rtt);
                         let _ = app.emit(
                             "batchtest://tick",
-                            &BatchTick { target: target.clone(), rtt_ms: rtt },
+                            &BatchTick {
+                                target: target.clone(),
+                                rtt_ms: rtt,
+                            },
                         );
                         if i + 1 < count {
                             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -153,7 +151,7 @@ impl BatchTestState {
             }
             // 自然结束后复位运行状态;若已被新任务接管(代次变化)则不动新任务的 token
             {
-                let mut inner = slot.lock().unwrap();
+                let mut inner = crate::safe_lock::lock(&slot);
                 if inner.gen == my_gen {
                     inner.token = None;
                 }
@@ -165,7 +163,7 @@ impl BatchTestState {
 
     pub fn stop(&self) {
         let token = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = crate::safe_lock::lock(&self.inner);
             inner.token.take()
         };
         if let Some(t) = token {
@@ -174,7 +172,7 @@ impl BatchTestState {
     }
 
     pub fn is_running(&self) -> bool {
-        self.inner.lock().unwrap().token.is_some()
+        crate::safe_lock::lock(&self.inner).token.is_some()
     }
 }
 

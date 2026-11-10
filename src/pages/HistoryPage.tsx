@@ -11,6 +11,8 @@ import { ConfirmModal, Modal } from "../components/ui";
 import { Icon } from "../components/Icon";
 import type { HistoryRow, TestResult } from "../types";
 
+const HISTORY_PAGE_SIZE = 100;
+
 const STATUS_CHIP: Record<string, { cls: string; text: string }> = {
   completed: { cls: "green", text: "完成" },
   cancelled: { cls: "amber", text: "已取消" },
@@ -23,7 +25,14 @@ export function HistoryPage() {
   // 筛选与选择提升到 store:切页回来不丢(见 store/ui.ts)
   const { from, to, desc, selected, setFrom, setTo, toggleDesc, setSelected, toggleSel } = useHistoryUi();
   const [rows, setRows] = useState<HistoryRow[]>([]);
+  // 筛选条件下的真实总条数; rows 可通过游标分页逐步加载,不是全量快照
+  const [total, setTotal] = useState(0);
+  // 清空是全局操作(无视筛选),确认框必须显示库内真实总数
+  const [globalTotal, setGlobalTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const nextCursor = useRef<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [detail, setDetail] = useState<TestResult | null>(null);
   // 请求序号:筛选/排序变更后,慢响应若已过期则丢弃,避免覆盖新结果
@@ -39,19 +48,70 @@ export function HistoryPage() {
     }
   };
 
+  const openClearConfirm = async () => {
+    setConfirmClear(true);
+    try {
+      // 清空作用于整库,不受当前筛选影响:单独取一次全量计数
+      setGlobalTotal(await api.historyCount());
+    } catch {
+      setGlobalTotal(null); // 取不到就退回已加载条数,不阻塞用户操作
+    }
+  };
+
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
+    const filter = { from: from || undefined, to: to || undefined };
     setLoading(true);
+    setLoadingMore(false);
+    setHasMore(false);
+    nextCursor.current = null;
     try {
-      const list = await api.historyList({ from: from || undefined, to: to || undefined, desc, limit: 500 });
+      // 列表与总数并发获取:同一筛选口径,避免统计窗口被误当全量
+      const [list, count] = await Promise.all([
+        api.historyList({ ...filter, desc, limit: HISTORY_PAGE_SIZE + 1 }),
+        api.historyCount(filter),
+      ]);
       if (seq !== loadSeq.current) return; // 过期响应:丢弃,不覆盖新筛选结果
-      setRows(list);
+      const firstPage = list.slice(0, HISTORY_PAGE_SIZE);
+      setRows(firstPage);
+      setTotal(count);
+      nextCursor.current = firstPage.at(-1)?.id ?? null;
+      setHasMore(list.length > HISTORY_PAGE_SIZE);
     } catch (e) {
       if (seq === loadSeq.current) toast("error", `历史加载失败:${String(e)}`);
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
   }, [from, to, desc, toast]);
+
+  const loadMore = useCallback(async () => {
+    if (loading || loadingMore || !hasMore) return;
+    const seq = loadSeq.current;
+    const cursorId = nextCursor.current;
+    setLoadingMore(true);
+    try {
+      const next = await api.historyList({
+        from: from || undefined,
+        to: to || undefined,
+        desc,
+        limit: HISTORY_PAGE_SIZE + 1,
+        cursorId: cursorId ?? undefined,
+      });
+      if (seq !== loadSeq.current) return;
+      const page = next.slice(0, HISTORY_PAGE_SIZE);
+      nextCursor.current = page.at(-1)?.id ?? cursorId;
+      const currentIds = new Set(rows.map((row) => row.id));
+      setHasMore(next.length > HISTORY_PAGE_SIZE);
+      setRows((current) => [
+        ...current,
+        ...page.filter((row) => !currentIds.has(row.id)),
+      ]);
+    } catch (e) {
+      if (seq === loadSeq.current) toast("error", `更多历史加载失败:${String(e)}`);
+    } finally {
+      if (seq === loadSeq.current) setLoadingMore(false);
+    }
+  }, [from, to, desc, loading, loadingMore, hasMore, total, toast]);
 
   useEffect(() => {
     load();
@@ -147,9 +207,27 @@ export function HistoryPage() {
           </button>
           <button className="btn sm" onClick={() => doExport("csv")}><Icon name="export" size={13} /> CSV</button>
           <button className="btn sm" onClick={() => doExport("json")}><Icon name="export" size={13} /> JSON</button>
-          <button className="btn sm danger" onClick={() => setConfirmClear(true)}><Icon name="trash" size={13} /> 清空</button>
+          <button className="btn sm danger" onClick={openClearConfirm}><Icon name="trash" size={13} /> 清空</button>
         </div>
       </div>
+
+      {/* 统计与图表只基于已加载窗口;库内更多时必须如实说明,不把窗口当全量 */}
+      {total > 0 && (
+        <div className="card pad mb16" style={{ padding: "10px 14px" }}>
+          <div className="row gap12 wrap" style={{ justifyContent: "space-between" }}>
+            <span className="faint" style={{ fontSize: 11.5 }}>
+              当前筛选共 <b className="mono" style={{ color: "var(--text)" }}>{total}</b> 条,
+              已加载 <b className="mono" style={{ color: "var(--text)" }}>{rows.length}</b> 条;
+              下方统计卡、日均对比、趋势与热力图基于已加载记录。
+            </span>
+            {hasMore && (
+              <button className="btn sm" onClick={loadMore} disabled={loading || loadingMore}>
+                {loadingMore ? "正在加载…" : `加载更多 (约 ${Math.max(0, total - rows.length)} 条未加载)`}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 统计卡行 */}
       {stats.n > 0 && (
@@ -305,7 +383,7 @@ export function HistoryPage() {
       {confirmClear && (
         <ConfirmModal
           title="清空历史记录"
-          text={`将永久删除全部 ${rows.length} 条测速记录(含失败/取消的记录),该操作不可恢复。导出的文件不受影响。`}
+          text={`将永久删除全部 ${globalTotal ?? rows.length} 条测速记录(含失败/取消的记录),该操作不可恢复。导出的文件不受影响。`}
           danger
           onOk={async () => {
             try {
@@ -317,7 +395,7 @@ export function HistoryPage() {
               toast("error", String(e));
             }
           }}
-          onClose={() => setConfirmClear(false)}
+          onClose={() => { setConfirmClear(false); setGlobalTotal(null); }}
         />
       )}
 

@@ -72,7 +72,7 @@ impl ServerRegistry {
     fn adapter_for(&self, node: &ServerNodeInfo) -> &dyn ProviderAdapter {
         if node.provider == super::model::PROVIDER_NDT7 {
             &self.ndt7
-        } else if node.provider == "cloudflare" {
+        } else if node.provider == super::model::PROVIDER_CLOUDFLARE {
             &self.cloudflare
         } else {
             &self.libre
@@ -109,6 +109,12 @@ impl ServerRegistry {
             n.id = util::node_id(&n.base_url, &n.name);
         }
         nodes
+    }
+
+    /// 丢弃可重新发现的节点缓存(当前仅 NDT7 的 Locate 结果)。
+    /// 测速失败时调用:社区节点可能已下线,下次应重新发现而不是复用旧节点。
+    pub fn invalidate_discovery(&self) {
+        self.ndt7.invalidate();
     }
 
     /// 在线获取官方列表(8s 超时,失败返回 None)
@@ -242,9 +248,7 @@ impl ServerRegistry {
                 adapter
                     .run_download(&node, counters.clone(), cfg, token.child_token())
                     .await;
-                let mbps = super::model::bytes_per_sec_to_mbps(
-                    counters.total() as f64 / 2.5,
-                );
+                let mbps = super::model::bytes_per_sec_to_mbps(counters.total() as f64 / 2.5);
                 (node, mbps)
             })
             .buffer_unordered(4);
@@ -264,7 +268,7 @@ impl ServerRegistry {
             let lat_score = 1.0 - (lat / max_latency).clamp(0.0, 1.0);
             let cap_score = (mbps / max_mbps).clamp(0.0, 1.0);
             let score = lat_score * 0.65 + cap_score * 0.35;
-            if best.as_ref().map_or(true, |(_, s)| score > *s) {
+            if best.as_ref().is_none_or(|(_, s)| score > *s) {
                 best = Some((node.clone(), score));
             }
         }
@@ -300,11 +304,17 @@ mod tests {
         let nodes = reg.bundled_list();
         assert!(!nodes.is_empty(), "内置兜底列表不应为空");
         for n in &nodes {
-            assert!(n.base_url.starts_with("https://"), "仅接受 HTTPS 节点: {n:?}");
+            assert!(
+                n.base_url.starts_with("https://"),
+                "仅接受 HTTPS 节点: {n:?}"
+            );
             assert!(!n.base_url.ends_with('/'), "兜底节点不带尾斜杠: {n:?}");
         }
         // 国内节点存在且端点字段完整
-        let cn = nodes.iter().find(|n| n.name.contains("China")).expect("应包含国内节点");
+        let cn = nodes
+            .iter()
+            .find(|n| n.name.contains("China"))
+            .expect("应包含国内节点");
         assert_eq!(cn.base_url, "https://cs.lt6.ltd");
         assert_eq!(cn.dl_url, "backend/garbage.php");
         assert_eq!(cn.ul_url, "backend/empty.php");
@@ -312,6 +322,8 @@ mod tests {
         assert_eq!(cn.getip_url, "backend/getIP.php");
         // 拼接后仍是合法 HTTPS 绝对 URL
         assert!(cn.download_url().starts_with("https://cs.lt6.ltd/backend/"));
-        assert!(cn.ping_endpoint().starts_with("https://cs.lt6.ltd/backend/"));
+        assert!(cn
+            .ping_endpoint()
+            .starts_with("https://cs.lt6.ltd/backend/"));
     }
 }

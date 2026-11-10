@@ -119,7 +119,10 @@ pub fn current_net_status() -> NetStatus {
             kind: i.kind.clone(),
             iface: i.friendly_name.clone().unwrap_or_else(|| i.name.clone()),
             link_mbps: i.link_mbps,
-            ipv4: i.ipv4.first().map(|s| s.split('/').next().unwrap_or(s).to_string()),
+            ipv4: i
+                .ipv4
+                .first()
+                .map(|s| s.split('/').next().unwrap_or(s).to_string()),
             has_ipv6: !i.ipv6.is_empty(),
         },
         None => NetStatus {
@@ -225,13 +228,21 @@ fn parse_wifi_details(text: &str) -> Option<WifiDetails> {
             d.receive_rate_mbps = t
                 .split(':')
                 .nth(1)
-                .and_then(|s| s.trim().split(|c: char| !c.is_ascii_digit() && c != '.').next())
+                .and_then(|s| {
+                    s.trim()
+                        .split(|c: char| !c.is_ascii_digit() && c != '.')
+                        .next()
+                })
                 .and_then(|n| n.parse::<f64>().ok());
         } else if t.contains("传输速率") || t.to_lowercase().contains("transmit rate") {
             d.transmit_rate_mbps = t
                 .split(':')
                 .nth(1)
-                .and_then(|s| s.trim().split(|c: char| !c.is_ascii_digit() && c != '.').next())
+                .and_then(|s| {
+                    s.trim()
+                        .split(|c: char| !c.is_ascii_digit() && c != '.')
+                        .next()
+                })
                 .and_then(|n| n.parse::<f64>().ok());
         }
     }
@@ -369,7 +380,13 @@ async fn icmp_ping_api(_host: &str, _count: u32, _timeout_ms: u32) -> Option<Pin
 async fn icmp_ping_subprocess(host: &str, count: u32, timeout_ms: u32) -> PingOutput {
     let host = host.to_string();
     let out = tokio::process::Command::new("ping")
-        .args(["-n", &count.to_string(), "-w", &timeout_ms.to_string(), &host])
+        .args([
+            "-n",
+            &count.to_string(),
+            "-w",
+            &timeout_ms.to_string(),
+            &host,
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .await;
@@ -397,7 +414,9 @@ pub async fn traceroute(host: &str, max_hops: u32) -> Result<Vec<TraceHop>, Stri
     if !out.status.success() && out.stdout.is_empty() {
         return Err("路由追踪启动失败".into());
     }
-    Ok(parse_traceroute_output(&String::from_utf8_lossy(&out.stdout)))
+    Ok(parse_traceroute_output(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
 }
 
 // ============================================================
@@ -665,18 +684,16 @@ pub async fn dns_test() -> DnsTestReport {
             }
         }
         if probes.iter().any(|p| p.ok) {
-            report
-                .domains
-                .push(DnsDomainResult {
-                    domain: "__hint__".into(),
-                    ok: true,
-                    ms: None,
-                    ips: vec![],
-                    error: Some(
-                        "系统配置的 DNS 服务器均无响应,但公共 DNS 可用:建议检查路由器/运营商 DNS"
-                            .into(),
-                    ),
-                });
+            report.domains.push(DnsDomainResult {
+                domain: "__hint__".into(),
+                ok: true,
+                ms: None,
+                ips: vec![],
+                error: Some(
+                    "系统配置的 DNS 服务器均无响应,但公共 DNS 可用:建议检查路由器/运营商 DNS"
+                        .into(),
+                ),
+            });
         }
     }
     report.server_probes = probes;
@@ -705,7 +722,7 @@ pub async fn gateway_test() -> GatewayReport {
     match gw {
         Some(g) => {
             let p = icmp_ping(&g, 4, 1500).await;
-            let reachable = p.loss_percent.map_or(false, |l| l < 100.0);
+            let reachable = p.loss_percent.is_some_and(|l| l < 100.0);
             GatewayReport {
                 gateway: Some(g),
                 reachable,
@@ -739,7 +756,6 @@ pub struct TcpResult {
 
 /// TCP 连接检测(真实 connect + 计时)
 pub async fn tcp_connect_test(host: &str, port: u16) -> TcpResult {
-    let target = format!("{host}:{port}");
     let t0 = Instant::now();
     let res = tokio::time::timeout(Duration::from_millis(4000), async {
         tokio::net::TcpStream::connect((host, port)).await
@@ -846,7 +862,12 @@ async fn fetch_first_line(url: &str) -> Result<String, String> {
 
 /// IPv6 可用性(独立于授权:始终检测;地址受授权控制)
 pub async fn ipv6_check(show_public_ip: bool) -> IpVersionCheck {
-    match tokio::time::timeout(Duration::from_secs(7), fetch_first_line("https://ipv6.icanhazip.com")).await {
+    match tokio::time::timeout(
+        Duration::from_secs(7),
+        fetch_first_line("https://ipv6.icanhazip.com"),
+    )
+    .await
+    {
         Ok(Ok(addr)) if !addr.is_empty() => IpVersionCheck {
             available: true,
             public_address: show_public_ip.then_some(addr),
@@ -1006,7 +1027,7 @@ pub async fn route_quality(
         match (&h.ip, h.timeout) {
             (Some(ip), false) => {
                 let p = icmp_ping(ip, probes, 1200).await;
-                let mut r = p.rtts_ms.clone();
+                let r = p.rtts_ms.clone();
                 let (avg, min, max, jit) = if r.is_empty() {
                     (None, None, None, None)
                 } else {
@@ -1040,7 +1061,10 @@ pub async fn route_quality(
             }),
         }
     }
-    Ok(RouteQualityReport { host: host.into(), hops: out })
+    Ok(RouteQualityReport {
+        host: host.into(),
+        hops: out,
+    })
 }
 
 // ============================================================
@@ -1090,9 +1114,11 @@ pub fn classify_dns_consistency(
     if system_ips.is_empty() && public_ips.is_empty() {
         return ("未知".into(), Some("所有 DNS 服务器均无响应".into()));
     }
-    let system_bogon = system_ips
-        .iter()
-        .any(|ip| ip.parse::<std::net::Ipv4Addr>().map(is_bogon_ipv4).unwrap_or(false));
+    let system_bogon = system_ips.iter().any(|ip| {
+        ip.parse::<std::net::Ipv4Addr>()
+            .map(is_bogon_ipv4)
+            .unwrap_or(false)
+    });
     if system_bogon {
         return (
             "可疑劫持".into(),
@@ -1171,7 +1197,12 @@ pub async fn dns_consistency(domain: &str) -> DnsConsistencyReport {
         .collect();
     let (verdict, note) = classify_dns_consistency(&system_ips, &public_ips);
 
-    DnsConsistencyReport { domain, entries, verdict, note }
+    DnsConsistencyReport {
+        domain,
+        entries,
+        verdict,
+        note,
+    }
 }
 
 // ============================================================
@@ -1245,7 +1276,10 @@ pub fn parse_stun_response(buf: &[u8], txid: &[u8; 12]) -> Option<MappedAddress>
                     buf[vstart + 6],
                     buf[vstart + 7],
                 ]);
-                (std::net::Ipv4Addr::from(xored ^ 0x2112A442), port_raw ^ 0x2112)
+                (
+                    std::net::Ipv4Addr::from(xored ^ 0x2112A442),
+                    port_raw ^ 0x2112,
+                )
             } else {
                 (
                     std::net::Ipv4Addr::new(
@@ -1280,11 +1314,17 @@ async fn stun_probe(host: &str, port: u16) -> NatServerEntry {
 
     let res = tokio::time::timeout(Duration::from_millis(3500), async move {
         use tokio::net::UdpSocket;
-        let mut addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| e.to_string())?;
-        let addr = addrs.find(|a| a.is_ipv4()).ok_or("无 IPv4 解析记录")?;
-        let sock = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })
+        let mut addrs = tokio::net::lookup_host((host, port))
             .await
             .map_err(|e| e.to_string())?;
+        let addr = addrs.find(|a| a.is_ipv4()).ok_or("无 IPv4 解析记录")?;
+        let sock = UdpSocket::bind(if addr.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        })
+        .await
+        .map_err(|e| e.to_string())?;
         sock.connect(addr).await.map_err(|e| e.to_string())?;
         sock.send(&packet).await.map_err(|e| e.to_string())?;
         let mut buf = [0u8; 256];
@@ -1324,15 +1364,21 @@ pub async fn nat_type() -> NatReport {
         .iter()
         .find(|i| i.is_default)
         .and_then(|i| i.ipv4.first().cloned())
-        .and_then(|s| s.split('/').next().and_then(|x| x.parse::<std::net::Ipv4Addr>().ok()));
+        .and_then(|s| {
+            s.split('/')
+                .next()
+                .and_then(|x| x.parse::<std::net::Ipv4Addr>().ok())
+        });
 
     let mut servers = Vec::new();
     for (h, p) in STUN_SERVERS {
         servers.push(stun_probe(h, *p).await);
     }
 
-    let ok: Vec<&NatServerEntry> =
-        servers.iter().filter(|e| e.ok && e.mapped_ip.is_some()).collect();
+    let ok: Vec<&NatServerEntry> = servers
+        .iter()
+        .filter(|e| e.ok && e.mapped_ip.is_some())
+        .collect();
     let (nat_type, note) = match ok.len() {
         0 => (
             "未知".to_string(),
@@ -1385,7 +1431,7 @@ mod tests {
         assert_eq!(&q[0..2], &[0x12, 0x34]); // ID
         assert_eq!(&q[2..4], &[0x01, 0x00]); // RD
         assert_eq!(&q[4..6], &[0, 1]); // QDCOUNT
-        // QNAME: 3www7example3com0
+                                       // QNAME: 3www7example3com0
         assert_eq!(q[12], 3);
         assert_eq!(&q[13..16], b"www");
         // 结尾 4 字节: QTYPE=1, QCLASS=1
@@ -1450,7 +1496,11 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
 传输速率(Mbps): 400.0\r\n";
         let d = parse_wifi_details(text).expect("应解析成功");
         assert_eq!(d.ssid.as_deref(), Some("MyHomeNet"));
-        assert_eq!(d.bssid.as_deref(), Some("84:16:f9:aa:bb:cc"), "BSSID 必须能解析");
+        assert_eq!(
+            d.bssid.as_deref(),
+            Some("84:16:f9:aa:bb:cc"),
+            "BSSID 必须能解析"
+        );
         assert_eq!(d.signal_percent, Some(92));
         assert_eq!(d.radio_type.as_deref(), Some("IEEE 802.11n"));
         assert_eq!(d.channel.as_deref(), Some("11"));
@@ -1460,7 +1510,10 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
 
     #[test]
     fn test_parse_wifi_details_absent_returns_none() {
-        assert!(parse_wifi_details("以太网适配器 以太网:\r\n  物理地址. . . : 00-11-22-33-44-55\r\n").is_none());
+        assert!(parse_wifi_details(
+            "以太网适配器 以太网:\r\n  物理地址. . . : 00-11-22-33-44-55\r\n"
+        )
+        .is_none());
     }
 
     /// 判定是否为私有/链路本地地址(网关断言用,兼容 10.x / 172.16-31.x / IPv6)
@@ -1501,11 +1554,7 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
             .enable_all()
             .build()
             .unwrap();
-        let out = rt.block_on(icmp_ping_api(
-            "this-host-does-not-exist.invalid",
-            2,
-            500,
-        ));
+        let out = rt.block_on(icmp_ping_api("this-host-does-not-exist.invalid", 2, 500));
         assert!(out.is_none());
     }
 
@@ -1537,10 +1586,7 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
         assert_eq!(v, "可疑劫持");
         assert!(n.unwrap().contains("保留"));
 
-        let (v, _) = classify_dns_consistency(
-            &["1.2.3.4".to_string()],
-            &public,
-        );
+        let (v, _) = classify_dns_consistency(&["1.2.3.4".to_string()], &public);
         assert_eq!(v, "不一致");
 
         let (v, _) = classify_dns_consistency(&[], &[]);
@@ -1587,7 +1633,7 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
     fn test_stun_malformed() {
         let txid = [9u8; 12];
         assert!(parse_stun_response(&[0, 1, 2], &txid).is_none()); // 截断
-        // 类型错误(0x0111 = Binding Error Response)
+                                                                   // 类型错误(0x0111 = Binding Error Response)
         let mut buf = build_stun_request(txid);
         buf[0..2].copy_from_slice(&0x0111u16.to_be_bytes());
         assert!(parse_stun_response(&buf, &txid).is_none());
@@ -1606,7 +1652,9 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
             .enable_all()
             .build()
             .unwrap();
-        let report = rt.block_on(route_quality("223.5.5.5", 8, 3)).expect("路由质量分析应成功");
+        let report = rt
+            .block_on(route_quality("223.5.5.5", 8, 3))
+            .expect("路由质量分析应成功");
         assert!(!report.hops.is_empty(), "至少应解析出一跳");
         // 首跳应为本地网关(可达);网段依环境而异(10.x/172.16-31.x/192.168.x/IPv6 ULA 等)
         let first = &report.hops[0];

@@ -586,3 +586,28 @@ html.no-anim *, html.no-anim *::before, html.no-anim *::after {
   *, *::before, *::after { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }
 }
 
+/* ------------------------------------------------------------
+   键盘可达性:全站统一焦点环。
+   focus-visible 只在键盘/辅助技术导航时出现,鼠标点击不显示;
+   此前全站没有任何焦点样式,键盘用户完全看不到当前位置。
+   ------------------------------------------------------------ */
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+/* 输入框/下拉已有边框+光晕焦点态,不叠加第二层描边 */
+.text-input:focus-visible,
+.select:focus-visible {
+  outline: none;
+}
+/* 滑块的 thumb 不参与 outline,改为加粗轨道环 */
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 4px;
+}
+/* 切换开关/导航/按钮:统一可见反馈 */
+.toggle:focus-visible, .nav-item:focus-visible, .win-btn:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+

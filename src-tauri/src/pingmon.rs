@@ -31,11 +31,7 @@ fn now_ms() -> u64 {
 }
 
 impl PingMonState {
-    pub fn start(
-        &self,
-        app: tauri::AppHandle,
-        host: String,
-    ) -> Result<(), String> {
+    pub fn start(&self, app: tauri::AppHandle, host: String) -> Result<(), String> {
         use tauri::Emitter as _;
         // 先校验输入再停旧任务:非法主机名不应中断正在运行的监测
         if !diagnostics::valid_host(&host) {
@@ -43,9 +39,9 @@ impl PingMonState {
         }
         self.stop();
         let token = CancellationToken::new();
-        *self.host.lock().unwrap() = Some(host.clone());
+        *crate::safe_lock::lock(&self.host) = Some(host.clone());
         let child = token.clone();
-        *self.token.lock().unwrap() = Some(token);
+        *crate::safe_lock::lock(&self.token) = Some(token);
         tauri::async_runtime::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(1000));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -65,13 +61,13 @@ impl PingMonState {
     }
 
     pub fn stop(&self) {
-        if let Some(t) = self.token.lock().unwrap().take() {
+        if let Some(t) = crate::safe_lock::lock(&self.token).take() {
             t.cancel();
         }
-        *self.host.lock().unwrap() = None;
+        *crate::safe_lock::lock(&self.host) = None;
     }
 
     pub fn current_host(&self) -> Option<String> {
-        self.host.lock().unwrap().clone()
+        crate::safe_lock::lock(&self.host).clone()
     }
 }

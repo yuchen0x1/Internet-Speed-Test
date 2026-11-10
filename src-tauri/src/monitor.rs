@@ -5,7 +5,7 @@
 //! - 网络状态变化(连接/断开/切换网卡)通过 net://status 事件通知前端。
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,10 +17,13 @@ use tokio::sync::RwLock;
 use crate::diagnostics::{current_net_status, NetStatus};
 use crate::settings::AppSettings;
 
-/// 环形缓冲容量:1s 间隔 × 3600 = 1 小时
+/// 环形缓冲容量上限(样本数)。采样间隔可配(200-5000ms),
+/// 因此按时间裁剪而非单纯按条数,保证窗口语义恒为"最近 1 小时"。
 const BUFFER_CAPACITY: usize = 3600;
-/// 网络状态复检间隔(采样次数)
-const STATUS_CHECK_EVERY: u32 = 3;
+/// 缓冲保留时长
+const BUFFER_WINDOW_MS: u64 = 60 * 60 * 1000;
+/// 网络状态复检间隔(时间节流,与采样间隔解耦)
+const STATUS_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IfaceTick {
@@ -46,7 +49,6 @@ pub struct MonitorTick {
 pub struct MonitorHandle {
     enabled: AtomicBool,
     paused: AtomicBool,
-    tick_count: AtomicU32,
     buffer: std::sync::Mutex<VecDeque<MonitorTick>>,
     last_status: std::sync::Mutex<Option<String>>,
 }
@@ -56,8 +58,7 @@ impl MonitorHandle {
         Self {
             enabled: AtomicBool::new(enabled),
             paused: AtomicBool::new(false),
-            tick_count: AtomicU32::new(0),
-            buffer: std::sync::Mutex::new(VecDeque::with_capacity(BUFFER_CAPACITY + 64)),
+            buffer: std::sync::Mutex::new(VecDeque::with_capacity(64)),
             last_status: std::sync::Mutex::new(None),
         }
     }
@@ -75,8 +76,14 @@ impl MonitorHandle {
     }
 
     fn push(&self, tick: MonitorTick) {
-        let mut buf = self.buffer.lock().unwrap();
-        if buf.len() >= BUFFER_CAPACITY {
+        let mut buf = crate::safe_lock::lock(&self.buffer);
+        // 先按时间淘汰超出保留窗口的尾部,再按条数兜底:
+        // 采样间隔从 200ms 调到 5000ms 时,仅按条数会让"1 小时窗口"变成几十分钟或数小时。
+        let cutoff = tick.ts_ms.saturating_sub(BUFFER_WINDOW_MS);
+        while buf.front().is_some_and(|t| t.ts_ms < cutoff) {
+            buf.pop_front();
+        }
+        while buf.len() >= BUFFER_CAPACITY {
             buf.pop_front();
         }
         buf.push_back(tick);
@@ -90,12 +97,8 @@ impl MonitorHandle {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
             .saturating_sub(window_secs * 1000);
-        let buf = self.buffer.lock().unwrap();
-        let recent: Vec<MonitorTick> = buf
-            .iter()
-            .filter(|t| t.ts_ms >= cutoff)
-            .cloned()
-            .collect();
+        let buf = crate::safe_lock::lock(&self.buffer);
+        let recent: Vec<MonitorTick> = buf.iter().filter(|t| t.ts_ms >= cutoff).cloned().collect();
         if recent.len() <= 256 {
             return recent;
         }
@@ -104,29 +107,35 @@ impl MonitorHandle {
     }
 
     pub fn latest(&self) -> Option<MonitorTick> {
-        self.buffer.lock().unwrap().back().cloned()
+        crate::safe_lock::lock(&self.buffer).back().cloned()
     }
 }
 
 /// 启动后台监控任务(App 生命周期内常驻,受设置开关控制)
 pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<MonitorHandle> {
-    let enabled = tauri::async_runtime::block_on(async {
-        settings.read().await.monitor_enabled
-    });
+    let enabled = tauri::async_runtime::block_on(async { settings.read().await.monitor_enabled });
     let handle = Arc::new(MonitorHandle::new(enabled));
     let h = handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut networks = Networks::new_with_refreshed_list().ok();
-        let mut interval = tokio::time::interval(Duration::from_millis(1000));
+        let mut last_status_check = std::time::Instant::now();
         loop {
-            interval.tick().await;
+            // 采样间隔取自设置(200-5000ms):每轮重读,改设置后下一轮即生效。
+            // netdev 的速率按内部实际经过时间计算,间隔变化不会让 bps 失真。
+            let interval_ms = {
+                let s = settings.read().await;
+                s.refresh_interval_ms.clamp(200, 5000) as u64
+            };
+            tokio::time::sleep(Duration::from_millis(interval_ms)).await;
             let enabled = h.enabled.load(Ordering::SeqCst);
             let paused = h.paused.load(Ordering::SeqCst);
             if !enabled || paused {
                 // 关闭/暂停时空转,不采样不 emit
                 continue;
             }
-            let Some(nets) = networks.as_mut() else { continue };
+            let Some(nets) = networks.as_mut() else {
+                continue;
+            };
             // 两次 refresh 之间计算增量速率
             nets.refresh(true);
             let now_ms = SystemTime::now()
@@ -166,9 +175,11 @@ pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<M
             h.push(tick.clone());
             let _ = app.emit("monitor://tick", &tick);
 
-            // 网络状态变化检测
-            let n = h.tick_count.fetch_add(1, Ordering::SeqCst) + 1;
-            if n % STATUS_CHECK_EVERY == 0 {
+            // 网络状态变化检测:按时间节流(固定 3s),
+            // 使状态复检频率不随采样间隔设置漂移
+            let now_check = std::time::Instant::now();
+            if now_check.duration_since(last_status_check) >= STATUS_CHECK_INTERVAL {
+                last_status_check = now_check;
                 let status = tokio::task::spawn_blocking(current_net_status)
                     .await
                     .unwrap_or(NetStatus {
@@ -182,7 +193,7 @@ pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<M
                 let serialized = serde_json::to_string(&status).unwrap_or_default();
                 // 在锁内完成比较与更新,不得跨 await 持有 std 锁
                 let notify_connected = {
-                    let mut last = h.last_status.lock().unwrap();
+                    let mut last = crate::safe_lock::lock(&h.last_status);
                     if last.as_deref() != Some(serialized.as_str()) {
                         let first_observation = last.is_none();
                         *last = Some(serialized);

@@ -182,7 +182,7 @@ pub enum EngineEvent {
     /// 进度(0-100)
     Progress { percent: f32 },
     /// 完成
-    Finished { result: TestResult },
+    Finished { result: Box<TestResult> },
     /// 失败
     Failed { error: String },
     /// 已取消
@@ -312,6 +312,8 @@ pub fn bytes_per_sec_to_mbps(bps: f64) -> f64 {
     bps * 8.0 / 1_000_000.0
 }
 
+/// Mbps -> 字节/秒(与 bytes_per_sec_to_mbps 互逆)。当前仅用于换算往返测试。
+#[cfg(test)]
 #[inline]
 pub fn mbps_to_bytes_per_sec(mbps: f64) -> f64 {
     mbps * 1_000_000.0 / 8.0

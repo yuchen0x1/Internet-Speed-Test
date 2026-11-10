@@ -93,19 +93,35 @@ ul {{ line-height:1.9; color:#c7d7ef; }}
         dur = r.duration_ms / 1000,
         dl = fmt(r.download_mbps),
         dlp = fmt(r.download_peak_mbps),
-        ul = r.upload_mbps.map_or_else(|| "未获得(上传测试未成功)".into(), |v| format!("{} Mbps", fmt(v))),
+        ul = r.upload_mbps.map_or_else(
+            || "未获得(上传测试未成功)".into(),
+            |v| format!("{} Mbps", fmt(v))
+        ),
         ping = fmt(r.idle_ping_ms),
         pmin = fmt(r.ping_min_ms),
         pmax = fmt(r.ping_max_ms),
-        ldl = r.loaded_down_ms.map_or_else(|| "未测量".into(), |v| format!("{} ms", fmt(v))),
-        lul = r.loaded_up_ms.map_or_else(|| "未测量".into(), |v| format!("{} ms", fmt(v))),
+        ldl = r
+            .loaded_down_ms
+            .map_or_else(|| "未测量".into(), |v| format!("{} ms", fmt(v))),
+        lul = r
+            .loaded_up_ms
+            .map_or_else(|| "未测量".into(), |v| format!("{} ms", fmt(v))),
         jit = fmt(r.jitter_ms),
-        loss = r.packet_loss_percent.map_or_else(|| "未获得(目标可能禁 ping)".into(), |v| format!("{} %", fmt(v))),
+        loss = r.packet_loss_percent.map_or_else(
+            || "未获得(目标可能禁 ping)".into(),
+            |v| format!("{} %", fmt(v))
+        ),
         fails = r.http_failures,
-        server = r.server.as_ref().map_or_else(|| "-".into(), |s| esc(&s.name)),
+        server = r
+            .server
+            .as_ref()
+            .map_or_else(|| "-".into(), |s| esc(&s.name)),
         nettype = esc(&r.network_type),
         iface = esc(&r.interface_name),
-        ip = r.public_ip.as_ref().map_or_else(|| "未获取(未授权)".into(), |v| esc(v)),
+        ip = r
+            .public_ip
+            .as_ref()
+            .map_or_else(|| "未获取(未授权)".into(), |v| esc(v)),
         isp = r.isp.as_ref().map_or_else(|| "未知".into(), |v| esc(v)),
         samples = samples_note,
         rating_badge = esc(&quality.rating),

@@ -6,6 +6,36 @@
 
 ---
 
+## 〇-5、2026-11-10 本地升级验证(未发布)
+
+> 本节记录当前未提交工作区的本地验证，不替代历史版本验收记录。
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| Rust 单元测试 | `cargo test --manifest-path src-tauri/Cargo.toml --lib`(独立 target) | ✅ 59 passed / 0 failed / 3 ignored(真实网络用例) |
+| Rust 格式 | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | ✅ |
+| Rust 严格 lint | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | ✅ 0 warning |
+| 前端类型检查 | `npm run typecheck` | ✅ |
+| 前端单元测试 | `npm test` | ✅ 37 passed / 0 failed(5 files) |
+| 前端生产构建 | `npm run build` | ✅ 7 个页面 chunk;主 JS 296.71 kB(gzip 92.54 kB) |
+| npm 依赖审计 | `npm audit --audit-level=high --registry=https://registry.npmjs.org` | ✅ 0 vulnerabilities |
+| 官方源安装验证 | `npm ci --ignore-scripts --registry=https://registry.npmjs.org` | ✅ 126 packages,0 vulnerabilities |
+| 补丁完整性 | `git diff --check` | ✅ |
+| Rust 漏洞审计 | `cargo audit` | ⏳ 本机未安装;CI 已配置,尚未远端执行 |
+| 桌面 GUI / 键盘走查 | 原生窗口 | ⏳ 本轮未启动 |
+
+**重点回归**：keyset 历史分页在并发新增/删除下不漂移；CSV 公式注入防护覆盖 `= + - @`、前导空白与控制字符；监控暂停状态可恢复；诊断历史类型筛选丢弃过期响应。
+
+**说明**：Rust 测试程序此前曾报 Windows `0xC0000139`，移除仅测试 Quiet sink 调用 Tauri `emit` 的用例后不再复现；与 Tauri/Win32 链接相关的根因推断未独立证明。`cargo fmt` 对整个 Rust crate 生效，diff 中包含既有文件的格式变化。
+
+**发布构建（v1.10.0，2026-11-10）**
+
+- `npm run tauri -- build --bundles nsis`：成功，产物 `NetVision Pro_1.10.0_x64-setup.exe`（3,657,453 字节 / 3.49 MiB）。
+- SHA-256：`1140c9e5aa0b7fdb1306c4c7c44e29c53c070b000e7eed567bd66522f701b673`。
+- 版本号同步：`tauri.conf.json` / `package.json` / `package-lock.json` / `Cargo.toml` / `Cargo.lock` 均为 1.10.0；升版后 Rust 59 passed / 前端 37 passed 复验通过。
+
+---
+
 ## 〇-4、v1.8.0 M-Lab NDT7 接入增量验证(2026-11-08)
 
 | 验收项 | 验证方式 | 结果 |

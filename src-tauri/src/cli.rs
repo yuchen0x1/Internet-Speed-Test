@@ -7,6 +7,7 @@
 //! 输出:
 //!   - 进度信息 → stderr(阶段/节点/失败原因)
 //!   - 结果     → stdout(--json 为完整 JSON,否则人类可读摘要)
+//!
 //! 退出码:0 完成 / 2 已取消 / 3 失败 / 1 参数错误
 
 use std::path::PathBuf;
@@ -163,9 +164,16 @@ async fn cli_main(flags: CliFlags) -> i32 {
         if let Some(err) = &result.error {
             println!("错误      : {err}");
         }
-        println!("下载      : {:.2} Mbps(峰值 {:.2})", result.download_mbps, result.download_peak_mbps);
+        println!(
+            "下载      : {:.2} Mbps(峰值 {:.2})",
+            result.download_mbps, result.download_peak_mbps
+        );
         if let Some(up) = result.upload_mbps {
-            println!("上传      : {:.2} Mbps(峰值 {:.2})", up, result.upload_peak_mbps.unwrap_or(0.0));
+            println!(
+                "上传      : {:.2} Mbps(峰值 {:.2})",
+                up,
+                result.upload_peak_mbps.unwrap_or(0.0)
+            );
         } else {
             println!("上传      : 未获得");
         }

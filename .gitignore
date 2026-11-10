@@ -6,3 +6,4 @@ src-tauri/gen/schemas/
 nul
 .DS_Store
 Thumbs.db
+.autonomous-upgrade/

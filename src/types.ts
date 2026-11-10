@@ -103,6 +103,24 @@ export interface ExportOutcome {
   total: number;
 }
 
+/** Prometheus 端点真实状态:requested 是设置意图,listening 是实际是否在监听 */
+export interface PrometheusStatus {
+  requested: boolean;
+  listening: boolean;
+  url: string;
+  error: string | null;
+}
+
+/** 诊断历史列表行(完整结果另取 diag_history_detail) */
+export interface DiagRunRow {
+  id: number;
+  created_at: string;
+  kind: string;
+  target: string | null;
+  ok: boolean;
+  summary: string;
+}
+
 export interface IfaceTick {
   name: string;
   rx_bps: number;
@@ -274,6 +292,7 @@ export interface AppInfo {
   version: string;
   os: string;
   data_dir: string;
+  settings_path: string;
 }
 
 export type ProbeResult = {

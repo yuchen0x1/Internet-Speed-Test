@@ -1,11 +1,12 @@
 // 设置中心:外观 / 测速 / 监控 / 隐私 / 关于 —— 所有选项真实生效
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../store/app";
 import { useServers } from "../store/test";
 import { isCancelError } from "../lib/format";
 import { ConfirmModal, Segmented } from "../components/ui";
 import { Icon } from "../components/Icon";
+import type { PrometheusStatus } from "../types";
 
 export function SettingsPage() {
   const toast = useApp((s) => s.toast);
@@ -16,11 +17,29 @@ export function SettingsPage() {
   const nodes = useServers((s) => s.nodes);
   const loadServers = useServers((s) => s.load);
   const [confirmClear, setConfirmClear] = useState(false);
+  // 端点真实状态:设置里的开关只代表意图,绑定可能失败(端口占用)
+  const [promStatus, setPromStatus] = useState<PrometheusStatus | null>(null);
+
+  const refreshPromStatus = useCallback(async () => {
+    try {
+      setPromStatus(await api.prometheusStatus());
+    } catch {
+      setPromStatus(null); // 状态不可知时退回只显示设置意图
+    }
+  }, []);
 
   useEffect(() => {
     loadServers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    refreshPromStatus();
+    // 绑定是异步的:设置变化后短延迟再查一次,避免"刚开就显示未监听"的假失败
+    if (!settings?.prometheus_enabled) return;
+    const t = window.setTimeout(refreshPromStatus, 400);
+    return () => window.clearTimeout(t);
+  }, [refreshPromStatus, settings?.prometheus_enabled, settings?.prometheus_port]);
 
   if (!settings) return null;
   const upd = updateSettings;
@@ -290,9 +309,12 @@ export function SettingsPage() {
               <div className="label">Prometheus / Grafana 指标导出</div>
               <div className="desc">
                 仅监听 127.0.0.1,提供 /metrics 文本格式
-                {settings.prometheus_enabled && (
-                  <span className="mono" style={{ color: "var(--cyan)" }}>
-                    {' '}· http://127.0.0.1:{settings.prometheus_port}/metrics
+                {settings.prometheus_enabled && promStatus?.listening && (
+                  <span className="mono" style={{ color: "var(--cyan)" }}> · {promStatus.url}</span>
+                )}
+                {settings.prometheus_enabled && promStatus && !promStatus.listening && (
+                  <span style={{ color: "var(--red)" }}>
+                    {" "}· {promStatus.error ?? "端点未在监听"}
                   </span>
                 )}
               </div>
@@ -381,7 +403,7 @@ export function SettingsPage() {
             <div>
               <div style={{ fontWeight: 700, fontSize: 15 }}>NetVision Pro</div>
               <div className="faint" style={{ fontSize: 12 }}>
-                版本 {appInfo?.version ?? "1.8.0"} · Windows ({appInfo?.os ?? "windows"})
+                版本 {appInfo?.version ?? "1.10.0"} · Windows ({appInfo?.os ?? "windows"})
               </div>
               <div className="faint" style={{ fontSize: 12 }}>
                 专业网络测速与诊断 · 真实测量,拒绝模拟数据
@@ -390,6 +412,8 @@ export function SettingsPage() {
           </div>
           <div className="faint mt12" style={{ fontSize: 11.5, lineHeight: 1.9 }}>
             数据目录:{appInfo?.data_dir ?? "-"}
+            <br />
+            设置文件:{appInfo?.settings_path ?? "-"}
             <br />
             测速协议:LibreSpeed(HTTP)· Cloudflare Speed· M-Lab NDT7(WebSocket)
             <br />

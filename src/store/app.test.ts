@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
-import { useApp } from "./app";
+import { api, onMonitorTick } from "../api";
+import { useApp, useMonitor } from "./app";
 import type { AppSettings } from "../types";
 
 // 隔离 Tauri IPC:仅测 store 的设置更新逻辑,零网络
@@ -11,6 +11,8 @@ vi.mock("../api", () => ({
     getSettings: vi.fn(),
     appInfo: vi.fn(),
     netStatus: vi.fn(),
+    monitorPaused: vi.fn(),
+    monitorSetPaused: vi.fn(),
     monitorSetEnabled: vi.fn(),
   },
   onMonitorTick: vi.fn(),
@@ -66,13 +68,38 @@ describe("updateSettings", () => {
     expect(useApp.getState().toasts).toHaveLength(0);
   });
 
-  it("保存失败:返回 false,本地乐观更新保留并弹错误提示", async () => {
+  it("保存失败:返回 false、回滚本地设置并弹错误提示", async () => {
     vi.mocked(api.setSettings).mockRejectedValueOnce(new Error("disk full"));
     const ok = await useApp.getState().updateSettings({ autostart: true });
     expect(ok).toBe(false);
-    // 本地状态仍为乐观更新值
-    expect(useApp.getState().settings?.autostart).toBe(true);
+    expect(useApp.getState().settings?.autostart).toBe(false);
     expect(useApp.getState().toasts.some((t) => t.kind === "error")).toBe(true);
+  });
+
+  it("并发设置保存按最新完整状态串行写入", async () => {
+    let finishFirst!: () => void;
+    vi.mocked(api.setSettings)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValueOnce(undefined);
+
+    const first = useApp.getState().updateSettings({ autostart: true });
+    const second = useApp.getState().updateSettings({ monitor_enabled: true });
+    expect(api.setSettings).toHaveBeenCalledTimes(0);
+
+    await Promise.resolve();
+    expect(api.setSettings).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.setSettings).mock.calls[0][0]).toMatchObject({
+      autostart: true,
+      monitor_enabled: true,
+    });
+
+    finishFirst();
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(api.setSettings).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.setSettings).mock.calls[1][0]).toMatchObject({
+      autostart: true,
+      monitor_enabled: true,
+    });
   });
 
   it("persist=false:不调用后端也返回 true", async () => {
@@ -87,5 +114,32 @@ describe("updateSettings", () => {
     const ok = await useApp.getState().updateSettings({ autostart: true });
     expect(ok).toBe(false);
     expect(useApp.getState().settings).toBeNull();
+  });
+});
+
+describe("monitor binding", () => {
+  beforeEach(() => {
+    useMonitor.setState({ paused: false, bound: false, buffer: [], latest: null });
+    vi.mocked(api.monitorPaused).mockReset().mockResolvedValue(false);
+    vi.mocked(onMonitorTick).mockReset().mockResolvedValue(() => undefined);
+  });
+
+  it("restores paused state from backend when binding", async () => {
+    vi.mocked(api.monitorPaused).mockResolvedValueOnce(true);
+
+    await useMonitor.getState().bind();
+
+    expect(useMonitor.getState().paused).toBe(true);
+    expect(api.monitorPaused).toHaveBeenCalledOnce();
+    expect(onMonitorTick).toHaveBeenCalledOnce();
+  });
+
+  it("continues binding if paused-state query fails", async () => {
+    vi.mocked(api.monitorPaused).mockRejectedValueOnce(new Error("unavailable"));
+
+    await useMonitor.getState().bind();
+
+    expect(useMonitor.getState().paused).toBe(false);
+    expect(onMonitorTick).toHaveBeenCalledOnce();
   });
 });

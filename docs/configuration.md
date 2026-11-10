@@ -22,7 +22,7 @@ CLI 在 Windows 上复用 `%APPDATA%\com.netvisionpro.app`。如果没有 `APPDA
 
 ## 默认设置
 
-以下值来自 v1.8.0 的 Rust 默认配置：
+以下值来自 v1.9.0 的 Rust 默认配置：
 
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |

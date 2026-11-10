@@ -50,12 +50,7 @@ fn notify(app: &tauri::AppHandle, settings: &AppSettings, title: &str, body: &st
         return;
     }
     use tauri_plugin_notification::NotificationExt as _;
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// 启动调度器(App 生命周期常驻)
@@ -148,7 +143,12 @@ pub fn notify_net_change(app: &tauri::AppHandle, settings: &AppSettings, connect
     if connected {
         notify(app, settings, "网络已恢复", "网络连接已恢复,监控继续运行。");
     } else {
-        notify(app, settings, "网络连接已断开", "检测到默认网络不可用,请检查网线/Wi-Fi/路由器。");
+        notify(
+            app,
+            settings,
+            "网络连接已断开",
+            "检测到默认网络不可用,请检查网线/Wi-Fi/路由器。",
+        );
     }
 }
 
@@ -168,7 +168,11 @@ pub fn spawn_alerts(
             tick.tick().await;
             let (enabled, threshold, target) = {
                 let s = settings.read().await;
-                (s.alert_enabled, s.alert_threshold_ms, s.alert_target.clone())
+                (
+                    s.alert_enabled,
+                    s.alert_threshold_ms,
+                    s.alert_target.clone(),
+                )
             };
             if !enabled || engine.is_running() {
                 window.clear();
@@ -194,11 +198,13 @@ pub fn spawn_alerts(
             let s = settings.read().await;
             // 丢包告警:最近 3 包全部失败
             if window.len() >= 3 && window.iter().rev().take(3).all(|r| r.is_none()) {
-                let cooled = last_loss_alert.map_or(true, |t| now.duration_since(t).as_secs() >= 600);
+                let cooled = last_loss_alert.is_none_or(|t| now.duration_since(t).as_secs() >= 600);
                 if cooled {
                     last_loss_alert = Some(now);
                     notify(
-                        &app, &s, "网络丢包告警",
+                        &app,
+                        &s,
+                        "网络丢包告警",
                         &format!("连续 3 次探测 {target} 均超时,请检查网络连通性。"),
                     );
                 }
@@ -209,12 +215,18 @@ pub fn spawn_alerts(
             if recent_ok.len() >= 3 {
                 let avg = recent_ok.iter().sum::<f64>() / recent_ok.len() as f64;
                 if avg > threshold as f64 {
-                    let cooled = last_latency_alert.map_or(true, |t| now.duration_since(t).as_secs() >= 600);
+                    let cooled =
+                        last_latency_alert.is_none_or(|t| now.duration_since(t).as_secs() >= 600);
                     if cooled {
                         last_latency_alert = Some(now);
                         notify(
-                            &app, &s, "延迟过高告警",
-                            &format!("对 {target} 的平均延迟 {:.0} ms 已超过阈值 {} ms。", avg, threshold),
+                            &app,
+                            &s,
+                            "延迟过高告警",
+                            &format!(
+                                "对 {target} 的平均延迟 {:.0} ms 已超过阈值 {} ms。",
+                                avg, threshold
+                            ),
                         );
                     }
                 }
