@@ -186,7 +186,7 @@ ICMP 可能被目标主机或中间设备限速、丢弃。应用把 HTTP 失败
 
 ## 安全修复
 
-当前前端图标构建依赖 `sharp@0.35.5`，对应的 npm audit 结果为 0 vulnerabilities。Rust 的 `glib` 告警来自非 Windows GTK/WebKit 依赖链，Windows 构建目标不包含该依赖；项目没有伪造锁文件版本或进行未经验证的大版本迁移。
+当前前端图标构建依赖 `sharp@0.35.5`，对应的 npm audit 结果为 0 vulnerabilities。Rust 依赖审计（cargo audit）未发现真实漏洞；报告的 `glib` unsound 告警来自非 Windows GTK/WebKit 依赖链，`zbus`/`zvariant`/`proc-macro-error` unmaintained 告警同样来自 Linux 侧或构建期传递依赖，Windows 构建目标不包含这些运行时依赖；项目没有伪造锁文件版本或进行未经验证的大版本迁移。
 
 ## v1.10.0
 

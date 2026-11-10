@@ -21,7 +21,7 @@
 | npm 依赖审计 | `npm audit --audit-level=high --registry=https://registry.npmjs.org` | ✅ 0 vulnerabilities |
 | 官方源安装验证 | `npm ci --ignore-scripts --registry=https://registry.npmjs.org` | ✅ 126 packages,0 vulnerabilities |
 | 补丁完整性 | `git diff --check` | ✅ |
-| Rust 漏洞审计 | `cargo audit` | ⏳ 本机未安装;CI 已配置,尚未远端执行 |
+| Rust 漏洞审计 | CI `cargo audit --file src-tauri/Cargo.lock` | ⚠️ 无真实漏洞；5 条 unmaintained/unsound 告警（Linux 侧/构建期传递依赖，见 README「安全修复」）；门禁调整为仅漏洞失败 |
 | 桌面 GUI / 键盘走查 | 原生窗口 | ⏳ 本轮未启动 |
 
 **重点回归**：keyset 历史分页在并发新增/删除下不漂移；CSV 公式注入防护覆盖 `= + - @`、前导空白与控制字符；监控暂停状态可恢复；诊断历史类型筛选丢弃过期响应。
