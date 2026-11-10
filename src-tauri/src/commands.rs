@@ -1059,6 +1059,74 @@ pub fn copy_result_text(result: crate::engine::model::TestResult) -> Result<Stri
     Ok(s)
 }
 
+// ============================================================
+// 自动更新
+// ============================================================
+
+/// 可用更新摘要(无可更新时为 None;数据来自更新源 latest.json)
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdaterInfo {
+    pub version: String,
+    pub notes: Option<String>,
+    pub pub_date: Option<String>,
+}
+
+/// 检查更新。端点不可达、签名校验失败等都如实报错,不静默当作"无更新"。
+#[tauri::command]
+pub async fn updater_check(app: AppHandle) -> Result<Option<UpdaterInfo>, String> {
+    use tauri_plugin_updater::UpdaterExt as _;
+    let updater = app
+        .updater_builder()
+        .build()
+        .map_err(|e| format!("更新器初始化失败: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("检查更新失败: {e}"))?;
+    Ok(update.map(|u| UpdaterInfo {
+        version: u.version.clone(),
+        notes: u.body.clone(),
+        pub_date: u.date.map(|d| d.to_string()),
+    }))
+}
+
+/// 下载并安装更新:进度经 updater://progress 事件回传,完成后重启应用。
+/// (Windows NSIS 以 passive 模式安装,进程由安装器接管)
+#[tauri::command]
+pub async fn updater_install(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt as _;
+    let updater = app
+        .updater_builder()
+        .build()
+        .map_err(|e| format!("更新器初始化失败: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("检查更新失败: {e}"))?;
+    let Some(update) = update else {
+        return Err("当前已是最新版本,无需安装".into());
+    };
+
+    let progress_app = app.clone();
+    let mut downloaded: u64 = 0;
+    let on_chunk = move |chunk: usize, total: Option<u64>| {
+        downloaded += chunk as u64;
+        let _ = progress_app.emit(
+            "updater://progress",
+            serde_json::json!({ "downloaded": downloaded, "total": total }),
+        );
+    };
+    let finish_app = app.clone();
+    let on_finish = move || {
+        let _ = finish_app.emit("updater://progress", serde_json::json!({ "done": true }));
+    };
+    update
+        .download_and_install(on_chunk, on_finish)
+        .await
+        .map_err(|e| format!("更新下载/安装失败: {e}"))?;
+    app.restart();
+}
+
 use tauri::Emitter as _;
 
 #[cfg(test)]

@@ -1,12 +1,12 @@
 // 设置中心:外观 / 测速 / 监控 / 隐私 / 关于 —— 所有选项真实生效
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { api, errMsg, onUpdaterProgress } from "../api";
 import { useApp } from "../store/app";
 import { useServers } from "../store/test";
 import { isCancelError } from "../lib/format";
 import { ConfirmModal, Segmented } from "../components/ui";
 import { Icon } from "../components/Icon";
-import type { PrometheusStatus } from "../types";
+import type { PrometheusStatus, UpdaterInfo } from "../types";
 
 export function SettingsPage() {
   const toast = useApp((s) => s.toast);
@@ -27,6 +27,58 @@ export function SettingsPage() {
       setPromStatus(null); // 状态不可知时退回只显示设置意图
     }
   }, []);
+
+  // 自动更新:检查结果与下载进度只在用户主动触发时获取
+  const [update, setUpdate] = useState<UpdaterInfo | null>(null);
+  const [updState, setUpdState] = useState<"idle" | "checking" | "downloading">("idle");
+  const [updMessage, setUpdMessage] = useState<string | null>(null);
+  const [downPct, setDownPct] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    let un: (() => void) | null = null;
+    onUpdaterProgress((p) => {
+      if (!alive) return;
+      if ("done" in p) setDownPct(100);
+      else if (p.total) setDownPct(Math.round((p.downloaded / p.total) * 100));
+    }).then((off) => {
+      if (!alive) off();
+      else un = off;
+    });
+    return () => {
+      alive = false;
+      un?.();
+    };
+  }, []);
+
+  const checkUpdate = async () => {
+    setUpdState("checking");
+    setUpdMessage(null);
+    setUpdate(null);
+    try {
+      const u = await api.updaterCheck();
+      if (u) setUpdate(u);
+      else setUpdMessage("已是最新版本");
+    } catch (e) {
+      setUpdMessage(`检查失败:${errMsg(e)}`);
+    } finally {
+      setUpdState((s) => (s === "checking" ? "idle" : s));
+    }
+  };
+
+  const installUpdate = async () => {
+    setUpdState("downloading");
+    setDownPct(0);
+    setUpdMessage(null);
+    try {
+      // 安装成功时应用会被更新器重启,命令不会正常返回;返回即代表失败
+      await api.updaterInstall();
+      setUpdState("idle");
+    } catch (e) {
+      setUpdMessage(`更新失败:${errMsg(e)}`);
+      setUpdState("idle");
+    }
+  };
 
   useEffect(() => {
     loadServers();
@@ -403,7 +455,7 @@ export function SettingsPage() {
             <div>
               <div style={{ fontWeight: 700, fontSize: 15 }}>NetVision Pro</div>
               <div className="faint" style={{ fontSize: 12 }}>
-                版本 {appInfo?.version ?? "1.10.0"} · Windows ({appInfo?.os ?? "windows"})
+                版本 {appInfo?.version ?? "1.11.0"} · Windows ({appInfo?.os ?? "windows"})
               </div>
               <div className="faint" style={{ fontSize: 12 }}>
                 专业网络测速与诊断 · 真实测量,拒绝模拟数据
@@ -418,6 +470,29 @@ export function SettingsPage() {
             测速协议:LibreSpeed(HTTP)· Cloudflare Speed· M-Lab NDT7(WebSocket)
             <br />
             说明:测速结果受服务器性能、Wi-Fi 信号与网卡协商速率影响;本软件不会把网卡标称速度当作宽带速率展示。
+          </div>
+          <div className="row gap8 mt12 wrap" style={{ alignItems: "center" }}>
+            <button className="btn sm" onClick={checkUpdate} disabled={updState !== "idle"}>
+              <Icon name="refresh" size={13} />
+              {updState === "checking" ? "检查中…" : "检查更新"}
+            </button>
+            {update && updState !== "downloading" && (
+              <button
+                className="btn primary sm"
+                onClick={installUpdate}
+                title={update.notes ?? undefined}
+              >
+                下载并安装 v{update.version}
+              </button>
+            )}
+            {updState === "downloading" && (
+              <span className="faint" style={{ fontSize: 12 }}>
+                正在下载更新…{downPct != null ? `${downPct}%` : ""}
+              </span>
+            )}
+            {updMessage && (
+              <span className="faint" style={{ fontSize: 11.5 }}>{updMessage}</span>
+            )}
           </div>
         </section>
       </div>

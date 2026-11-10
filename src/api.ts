@@ -28,6 +28,7 @@ import type {
   TcpResult,
   TestResult,
   TraceHop,
+  UpdaterInfo,
   WifiDetails,
 } from "./types";
 
@@ -108,6 +109,8 @@ export const api = {
     invoke<MonitorTick[]>("monitor_history", { windowSecs }),
   monitorLatest: () => invoke<MonitorTick | null>("monitor_latest"),
   prometheusStatus: () => invoke<PrometheusStatus>("prometheus_status"),
+  updaterCheck: () => invoke<UpdaterInfo | null>("updater_check"),
+  updaterInstall: () => invoke<void>("updater_install"),
 
   diagLocal: () => invoke<LocalNetInfo>("diag_local_network"),
   diagHistoryList: (opts?: { kind?: string; limit?: number }) =>
@@ -178,6 +181,16 @@ export function onNetStatus(cb: (s: NetStatus) => void): Promise<UnlistenFn> {
 /** 路由追踪逐跳事件 */
 export function onTraceHop(cb: (hop: TraceHop) => void): Promise<UnlistenFn> {
   return listen<TraceHop>("diag://trace", (e) => cb(e.payload));
+}
+
+/** 更新下载进度事件:字节进度或下载完成标记 */
+export function onUpdaterProgress(
+  cb: (p: { downloaded: number; total: number | null } | { done: true }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ downloaded: number; total: number | null } | { done: true }>(
+    "updater://progress",
+    (e) => cb(e.payload),
+  );
 }
 
 /** 批量拨测事件 */

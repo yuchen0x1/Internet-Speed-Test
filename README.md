@@ -61,6 +61,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 - **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.10.0_x64-setup.exe`。
 - **安装模式**：Tauri NSIS `currentUser`，默认按当前用户安装，不需要管理员权限。
 - **WebView2 安装**：安装器使用 `downloadBootstrapper` 模式，在缺少运行时的环境中引导安装。
+- **应用内更新**：v1.11.0 起可在「设置与关于 → 关于」点击「检查更新」下载并安装新版本（更新包经 minisign 签名校验，安装完成后自动重启）。
 
 ## 快速开始
 
@@ -145,6 +146,20 @@ NSIS 安装包输出到：
 src-tauri/target/release/bundle/nsis/
 ```
 
+### 签名发布构建（自动更新用）
+
+`npm run tauri build` 产出的是不带更新签名的普通安装包。带签名的构建用于发布：push `v*` 标签时由 CI（`.github/workflows/release.yml`）自动完成，签名私钥来自 repo secrets。本地手动执行签名构建可用：
+
+```bash
+npm run build:release
+```
+
+该脚本从 `~/.tauri/netvision-pro-updater.key`（及同名 `.password` 文件）读取 minisign 私钥，通过 `src-tauri/updater.conf.json` 启用 `createUpdaterArtifacts`，产出安装包与 `.sig` 签名文件。也可以自行设置 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 后运行：
+
+```bash
+npm run tauri -- build --bundles nsis --config src-tauri/updater.conf.json
+```
+
 真实网络集成用例默认标记为 `#[ignore]`，需要时显式执行：
 
 ```bash
@@ -187,6 +202,11 @@ ICMP 可能被目标主机或中间设备限速、丢弃。应用把 HTTP 失败
 ## 安全修复
 
 当前前端图标构建依赖 `sharp@0.35.5`，对应的 npm audit 结果为 0 vulnerabilities。Rust 依赖审计（cargo audit）未发现真实漏洞；报告的 `glib` unsound 告警来自非 Windows GTK/WebKit 依赖链，`zbus`/`zvariant`/`proc-macro-error` unmaintained 告警同样来自 Linux 侧或构建期传递依赖，Windows 构建目标不包含这些运行时依赖；项目没有伪造锁文件版本或进行未经验证的大版本迁移。
+
+## v1.11.0
+
+- 应用内自动更新：设置页可一键检查、下载并安装新版本（minisign 签名校验，安装后自动重启）。
+- 推送 `v*` 标签自动构建签名安装包并发布 Release，同时生成更新器所需的 `latest.json`。
 
 ## v1.10.0
 

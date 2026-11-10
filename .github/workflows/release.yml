@@ -1,0 +1,103 @@
+name: Release
+
+# 推送 v* 标签自动发布;也可手动触发做无发布 dry-run(仅构建与签名)
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.2
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装前端依赖
+        run: npm ci --registry=https://registry.npmjs.org
+
+      # minisign 私钥来自 repo secrets;updater.conf.json 启用 createUpdaterArtifacts 生成 .sig
+      - name: 构建并签名
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: npm run tauri -- build --bundles nsis --config src-tauri/updater.conf.json
+
+      # 统一产物名(点分隔,与 README 安装链接一致),生成 SHA256SUMS 与 updater 的 latest.json
+      - name: 整理产物
+        id: artifacts
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          SRC="src-tauri/target/release/bundle/nsis/NetVision Pro_${VERSION}_x64-setup.exe"
+          test -f "$SRC" || { echo "安装包不存在: $SRC"; exit 1; }
+          test -f "${SRC}.sig" || { echo "签名文件不存在: ${SRC}.sig"; exit 1; }
+          mkdir -p release-artifacts
+          cp "$SRC" "release-artifacts/NetVision.Pro_${VERSION}_x64-setup.exe"
+          cp "${SRC}.sig" "release-artifacts/NetVision.Pro_${VERSION}_x64-setup.exe.sig"
+          ( cd release-artifacts && sha256sum "NetVision.Pro_${VERSION}_x64-setup.exe" > SHA256SUMS.txt )
+          node -e '
+            const fs = require("fs");
+            const version = require("./src-tauri/tauri.conf.json").version;
+            const repo = process.env.GITHUB_REPOSITORY;
+            const sig = fs.readFileSync(`release-artifacts/NetVision.Pro_${version}_x64-setup.exe.sig`, "utf8").trim();
+            const latest = {
+              version,
+              notes: `NetVision Pro v${version}`,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": {
+                  signature: sig,
+                  url: `https://github.com/${repo}/releases/download/v${version}/NetVision.Pro_${version}_x64-setup.exe`,
+                },
+              },
+            };
+            fs.writeFileSync("release-artifacts/latest.json", JSON.stringify(latest, null, 2) + "\n");
+            console.log("--- latest.json ---");
+            console.log(fs.readFileSync("release-artifacts/latest.json", "utf8"));
+          '
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # 仅标签触发时发布;workflow_dispatch 干跑只验证构建与签名
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # 注释标签(tag -m)即发布说明;空标签消息回退为自动生成
+          NOTES="$(git tag -l --format='%(contents)' "$TAG" | sed -e 's/[[:space:]]*$//')"
+          if [ -n "$NOTES" ]; then
+            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --notes "$NOTES" \
+              || gh release upload "$TAG" --clobber release-artifacts/*
+          else
+            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --generate-notes \
+              || gh release upload "$TAG" --clobber release-artifacts/*
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[].name'

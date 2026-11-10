@@ -1,6 +1,6 @@
 [package]
 name = "netvision-pro"
-version = "1.10.0"
+version = "1.11.0"
 description = "NetVision Pro - 专业级桌面网络测速与诊断软件"
 authors = ["NetVision Pro"]
 edition = "2021"
@@ -34,6 +34,7 @@ tauri-plugin-dialog = "2.8.4"
 tauri-plugin-log = "2.10.1"
 tauri-plugin-notification = "2.8.0"
 tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-updater = "2.14.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 tokio-tungstenite = { version = "0.30", features = ["connect", "native-tls"] }

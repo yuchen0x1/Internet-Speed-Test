@@ -295,6 +295,13 @@ export interface AppInfo {
   settings_path: string;
 }
 
+/** 可用更新摘要(来自更新源 latest.json;无可更新时为 null) */
+export interface UpdaterInfo {
+  version: string;
+  notes: string | null;
+  pub_date: string | null;
+}
+
 export type ProbeResult = {
   id: string;
   alive: boolean;

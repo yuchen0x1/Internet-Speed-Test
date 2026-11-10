@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.11.0 (2026-11-10)
+
+### Added
+
+- 应用内自动更新：设置页「检查更新」，通过 GitHub Release 的 `latest.json` 检查新版本，minisign 签名校验后显示下载进度并以 passive 模式安装、自动重启。
+- Release 自动化工作流：推送 `v*` 标签自动完成签名构建，生成 `latest.json` 与 `SHA256SUMS.txt` 并发布 GitHub Release。
+
+### Changed
+
+- 构建启用 `createUpdaterArtifacts`；更新器端点指向本仓库 Releases。
+
 ## v1.10.0 (2026-11-10)
 
 ### Added

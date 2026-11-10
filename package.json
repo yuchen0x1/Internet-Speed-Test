@@ -1,7 +1,7 @@
 {
   "name": "netvision-pro",
   "private": true,
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "NetVision Pro - 专业级桌面网络测速与诊断软件",
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
-    "icons": "node build-icons.mjs"
+    "icons": "node build-icons.mjs",
+    "build:release": "node scripts/build-release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.7.0",

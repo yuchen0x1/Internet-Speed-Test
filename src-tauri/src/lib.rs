@@ -67,6 +67,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 二次启动:唤起已有窗口
             if let Some(w) = app.get_webview_window("main") {
@@ -299,6 +300,8 @@ pub fn run() {
             commands::monitor_history,
             commands::monitor_latest,
             commands::monitor_paused,
+            commands::updater_check,
+            commands::updater_install,
             commands::diag_local_network,
             commands::diag_history_list,
             commands::diag_history_detail,
