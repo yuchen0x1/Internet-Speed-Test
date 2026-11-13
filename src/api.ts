@@ -14,6 +14,7 @@ import type {
   ExportOutcome,
   GatewayReport,
   HistoryRow,
+  HistorySummary,
   HttpsResult,
   IpVersionCheck,
   LocalNetInfo,
@@ -63,7 +64,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 export const api = {
   appInfo: () => invoke<AppInfo>("get_app_info"),
   getSettings: () => invoke<AppSettings>("get_settings"),
-  setSettings: (settings: AppSettings) => invoke<void>("set_settings", { settings }),
+  setSettings: (settings: AppSettings) => invoke<AppSettings>("set_settings", { settings }),
   netStatus: () => invoke<NetStatus>("get_network_status"),
 
   serversList: () => invoke<ServerNodeInfo[]>("servers_list"),
@@ -97,9 +98,13 @@ export const api = {
       to: opts?.to ?? null,
     }),
   historyDelete: (id: number) => invoke<void>("history_delete", { id }),
+  historySummary: (opts?: { from?: string; to?: string }) =>
+    invoke<HistorySummary>("history_summary", { from: opts?.from ?? null, to: opts?.to ?? null }),
   historyClear: () => invoke<void>("history_clear"),
-  historyExport: (format: "csv" | "json") =>
-    invoke<ExportOutcome>("history_export", { format }),
+  historyExport: (format: "csv" | "json", opts?: { from?: string; to?: string; desc?: boolean }) =>
+    invoke<ExportOutcome>("history_export", {
+      format, from: opts?.from ?? null, to: opts?.to ?? null, desc: opts?.desc ?? true,
+    }),
   historyExportReport: (id: number) => invoke<string>("history_export_report", { id }),
 
   monitorSetEnabled: (enabled: boolean) => invoke<void>("monitor_set_enabled", { enabled }),

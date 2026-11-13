@@ -50,6 +50,7 @@ impl PingMonState {
                     _ = child.cancelled() => return,
                     _ = tick.tick() => {
                         let p = diagnostics::icmp_ping(&host, 1, 1200).await;
+                        if child.is_cancelled() { return; }
                         let rtt = p.rtts_ms.first().copied();
                         let payload = PingMonTick { ts_ms: now_ms(), rtt_ms: rtt };
                         let _ = app.emit("pingmon://tick", &payload);

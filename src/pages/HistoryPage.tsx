@@ -5,11 +5,12 @@ import { useApp } from "../store/app";
 import { useTest } from "../store/test";
 import { useHistoryUi } from "../store/ui";
 import { isCancelError, latencyPoints } from "../lib/format";
+import { historyDateRange, recentCompleted } from "../lib/history";
 import { LineChart, type Series } from "../components/LineChart";
 import { HistoryHeatmap } from "../components/HistoryHeatmap";
 import { ConfirmModal, Modal } from "../components/ui";
 import { Icon } from "../components/Icon";
-import type { HistoryRow, TestResult } from "../types";
+import type { HistoryRow, HistorySummary, TestResult } from "../types";
 
 const HISTORY_PAGE_SIZE = 100;
 
@@ -23,10 +24,14 @@ export function HistoryPage() {
   const toast = useApp((s) => s.toast);
   const lastResult = useTest((s) => s.result);
   // 筛选与选择提升到 store:切页回来不丢(见 store/ui.ts)
-  const { from, to, desc, selected, setFrom, setTo, toggleDesc, setSelected, toggleSel } = useHistoryUi();
+  const { from, to, desc, selected, setFrom, setTo, setRange, toggleDesc, setSelected, toggleSel } = useHistoryUi();
   const [rows, setRows] = useState<HistoryRow[]>([]);
   // 筛选条件下的真实总条数; rows 可通过游标分页逐步加载,不是全量快照
   const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<HistorySummary | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const invalidRange = !!from && !!to && from > to;
   // 清空是全局操作(无视筛选),确认框必须显示库内真实总数
   const [globalTotal, setGlobalTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,24 +66,33 @@ export function HistoryPage() {
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     const filter = { from: from || undefined, to: to || undefined };
+    setRows([]);
+    setTotal(0);
+    setSummary(null);
+    setLoadError(null);
     setLoading(true);
     setLoadingMore(false);
     setHasMore(false);
     nextCursor.current = null;
+    if (from && to && from > to) {
+      setLoading(false);
+      return;
+    }
     try {
       // 列表与总数并发获取:同一筛选口径,避免统计窗口被误当全量
-      const [list, count] = await Promise.all([
+      const [list, stats] = await Promise.all([
         api.historyList({ ...filter, desc, limit: HISTORY_PAGE_SIZE + 1 }),
-        api.historyCount(filter),
+        api.historySummary(filter),
       ]);
       if (seq !== loadSeq.current) return; // 过期响应:丢弃,不覆盖新筛选结果
       const firstPage = list.slice(0, HISTORY_PAGE_SIZE);
       setRows(firstPage);
-      setTotal(count);
+      setTotal(stats.total);
+      setSummary(stats);
       nextCursor.current = firstPage.at(-1)?.id ?? null;
       setHasMore(list.length > HISTORY_PAGE_SIZE);
     } catch (e) {
-      if (seq === loadSeq.current) toast("error", `历史加载失败:${String(e)}`);
+      if (seq === loadSeq.current) setLoadError(`历史加载失败：${String(e)}`);
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
@@ -100,29 +114,25 @@ export function HistoryPage() {
       if (seq !== loadSeq.current) return;
       const page = next.slice(0, HISTORY_PAGE_SIZE);
       nextCursor.current = page.at(-1)?.id ?? cursorId;
-      const currentIds = new Set(rows.map((row) => row.id));
       setHasMore(next.length > HISTORY_PAGE_SIZE);
-      setRows((current) => [
-        ...current,
-        ...page.filter((row) => !currentIds.has(row.id)),
-      ]);
+      setRows((current) => {
+        const currentIds = new Set(current.map((row) => row.id));
+        return [...current, ...page.filter((row) => !currentIds.has(row.id))];
+      });
     } catch (e) {
       if (seq === loadSeq.current) toast("error", `更多历史加载失败:${String(e)}`);
     } finally {
       if (seq === loadSeq.current) setLoadingMore(false);
     }
-  }, [from, to, desc, loading, loadingMore, hasMore, total, toast]);
+  }, [from, to, desc, loading, loadingMore, hasMore, toast]);
 
   useEffect(() => {
     load();
+    return () => { loadSeq.current++; };
   }, [load, lastResult?.id]);
 
   const stats = useMemo(() => {
     const done = rows.filter((r) => r.status === "completed");
-    const n = done.length;
-    const avg = (f: (r: HistoryRow) => number) => (n ? done.reduce((a, r) => a + f(r), 0) / n : null);
-    const best = done.reduce<HistoryRow | null>(
-      (b, r) => (!b || r.download_mbps > b.download_mbps ? r : b), null);
     const byDay = new Map<string, { sum: number; n: number }>();
     for (const r of done) {
       const k = r.created_at.slice(0, 10);
@@ -135,12 +145,11 @@ export function HistoryPage() {
       .map(([k, v]) => ({ day: k, avg: v.sum / v.n }))
       .sort((a, b) => a.day.localeCompare(b.day))
       .slice(-14);
-    return { n, d: avg((r) => r.download_mbps), u: avg((r) => r.upload_mbps ?? 0),
-             p: avg((r) => r.idle_ping_ms), best, daily };
+    return { daily };
   }, [rows]);
 
   const trendData = useMemo(() => {
-    const asc = [...rows].filter((r) => r.status === "completed").reverse().slice(-40);
+    const asc = recentCompleted(rows);
     const down: Series = {
       name: "下载", color: "#22d3ee",
       data: asc.map((r, i) => [i, r.download_mbps] as [number, number]),
@@ -148,7 +157,7 @@ export function HistoryPage() {
     };
     const up: Series = {
       name: "上传", color: "#a78bfa",
-      data: asc.map((r, i) => [i, r.upload_mbps ?? 0] as [number, number]),
+      data: asc.flatMap((r, i) => r.upload_mbps == null ? [] : [[i, r.upload_mbps] as [number, number]]),
     };
     return { down, up, n: asc.length };
   }, [rows]);
@@ -159,8 +168,10 @@ export function HistoryPage() {
   const compareRows = rows.filter((r) => selected.includes(r.id));
 
   const doExport = async (format: "csv" | "json") => {
+    if (invalidRange || exporting) return;
+    setExporting(true);
     try {
-      const r = await api.historyExport(format);
+      const r = await api.historyExport(format, { from: from || undefined, to: to || undefined, desc });
       if (r.total > r.exported) {
         toast("warn", `已导出前 ${r.exported} 条(共 ${r.total} 条,超出上限部分被截断):${r.path}`);
       } else {
@@ -168,6 +179,8 @@ export function HistoryPage() {
       }
     } catch (e) {
       if (!isCancelError(e)) toast("error", `导出失败:${String(e)}`);
+    } finally {
+      setExporting(false);
     }
   };
   const doReport = async (id: number) => {
@@ -199,26 +212,54 @@ export function HistoryPage() {
           <div className="page-sub">全部数据来自本机实际执行的测试 · 本地 SQLite 存储</div>
         </div>
         <div className="row gap8 wrap">
-          <input type="date" className="text-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="起始日期" />
-          <span className="faint">至</span>
-          <input type="date" className="text-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="结束日期" />
+          <button className="btn sm" onClick={load} disabled={loading}>{loading ? "正在刷新…" : "刷新记录"}</button>
           <button className="btn sm" onClick={toggleDesc}>
             <Icon name="clock" size={13} /> {desc ? "最新在前" : "最早在前"}
           </button>
-          <button className="btn sm" onClick={() => doExport("csv")}><Icon name="export" size={13} /> CSV</button>
-          <button className="btn sm" onClick={() => doExport("json")}><Icon name="export" size={13} /> JSON</button>
           <button className="btn sm danger" onClick={openClearConfirm}><Icon name="trash" size={13} /> 清空</button>
         </div>
       </div>
 
-      {/* 统计与图表只基于已加载窗口;库内更多时必须如实说明,不把窗口当全量 */}
+      <div className="card pad mb16 history-toolbar" role="group" aria-label="历史日期筛选和导出">
+        <div className="row gap8 wrap">
+          <label className="history-date-label">起始日期
+            <input type="date" className="text-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-invalid={invalidRange} />
+          </label>
+          <label className="history-date-label">结束日期
+            <input type="date" className="text-input" value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={invalidRange} />
+          </label>
+          <div className="row gap4 wrap" aria-label="快捷日期范围">
+            {([{ days: 1, label: "今天" }, { days: 7, label: "近 7 天" }, { days: 30, label: "近 30 天" }]).map(({ days, label }) => (
+              <button className="btn sm" key={days} onClick={() => {
+                const range = historyDateRange(days);
+                setRange(range.from, range.to);
+              }}>{label}</button>
+            ))}
+            <button className="btn ghost sm" onClick={() => setRange("", "")}>全部日期</button>
+          </div>
+        </div>
+        <div className="row gap8 wrap">
+          <span className="faint">{exporting ? "正在导出…" : "导出当前筛选"}</span>
+          <button className="btn sm" disabled={invalidRange || loading || exporting || !total} onClick={() => doExport("csv")}><Icon name="export" size={13} /> CSV</button>
+          <button className="btn sm" disabled={invalidRange || loading || exporting || !total} onClick={() => doExport("json")}><Icon name="export" size={13} /> JSON</button>
+        </div>
+      </div>
+      {(invalidRange || loadError) && (
+        <div className="test-error mb16" role="alert">
+          {invalidRange ? "起始日期不能晚于结束日期，请调整日期范围。" : loadError}
+          {!invalidRange && <button className="btn sm" onClick={load}>重试加载</button>}
+        </div>
+      )}
+
+      {/* 统计覆盖整个筛选范围，图表仍如实说明已加载窗口。 */}
       {total > 0 && (
         <div className="card pad mb16" style={{ padding: "10px 14px" }}>
           <div className="row gap12 wrap" style={{ justifyContent: "space-between" }}>
             <span className="faint" style={{ fontSize: 11.5 }}>
               当前筛选共 <b className="mono" style={{ color: "var(--text)" }}>{total}</b> 条,
               已加载 <b className="mono" style={{ color: "var(--text)" }}>{rows.length}</b> 条;
-              下方统计卡、日均对比、趋势与热力图基于已加载记录。
+              统计卡覆盖整个筛选范围；日均对比、趋势与热力图基于已加载记录。
+              {summary && ` 完成 ${summary.completed} · 失败 ${summary.failed} · 取消 ${summary.cancelled}。`}
             </span>
             {hasMore && (
               <button className="btn sm" onClick={loadMore} disabled={loading || loadingMore}>
@@ -230,24 +271,24 @@ export function HistoryPage() {
       )}
 
       {/* 统计卡行 */}
-      {stats.n > 0 && (
+      {summary && total > 0 && (
         <div className="stat-cards-row mb16">
-          <div className="card pad"><div className="stat-head"><Icon name="history" size={15} /> 总测试</div>
-            <div className="stat-value mono" style={{ fontSize: 24 }}>{stats.n}</div><div className="stat-unit">次完成</div></div>
+          <div className="card pad"><div className="stat-head"><Icon name="history" size={15} /> 成功测试</div>
+            <div className="stat-value mono" style={{ fontSize: 24 }}>{summary.completed}</div><div className="stat-unit">次完成 · 全部筛选记录</div></div>
           <div className="card pad"><div className="stat-head"><Icon name="download" size={15} /> 平均下载</div>
-            <div className="stat-value mono" style={{ fontSize: 24, color: "var(--cyan)" }}>{stats.d?.toFixed(1) ?? "—"}</div><div className="stat-unit">Mbps</div></div>
+            <div className="stat-value mono" style={{ fontSize: 24, color: "var(--cyan)" }}>{summary.avg_download_mbps?.toFixed(1) ?? "—"}</div><div className="stat-unit">Mbps · 成功测试</div></div>
           <div className="card pad"><div className="stat-head"><Icon name="upload" size={15} /> 平均上传</div>
-            <div className="stat-value mono" style={{ fontSize: 24, color: "var(--purple)" }}>{stats.u?.toFixed(1) ?? "—"}</div><div className="stat-unit">Mbps</div></div>
+            <div className="stat-value mono" style={{ fontSize: 24, color: "var(--purple)" }}>{summary.avg_upload_mbps?.toFixed(1) ?? "—"}</div><div className="stat-unit">Mbps · 仅有效上传结果</div></div>
           <div className="card pad"><div className="stat-head"><Icon name="target" size={15} /> 平均延迟</div>
-            <div className="stat-value mono" style={{ fontSize: 24 }}>{stats.p?.toFixed(1) ?? "—"}</div><div className="stat-unit">ms</div></div>
+            <div className="stat-value mono" style={{ fontSize: 24 }}>{summary.avg_ping_ms?.toFixed(1) ?? "—"}</div><div className="stat-unit">ms · 成功测试</div></div>
           <div className="card pad"><div className="stat-head"><Icon name="zap" size={15} /> 最佳下载</div>
-            <div className="stat-value mono" style={{ fontSize: 24, color: "var(--green)" }}>{stats.best?.download_mbps.toFixed(1) ?? "—"}</div>
-            <div className="stat-unit">{stats.best ? stats.best.created_at.slice(5, 10) : ""}</div></div>
+            <div className="stat-value mono" style={{ fontSize: 24, color: "var(--green)" }}>{summary.best_download_mbps?.toFixed(1) ?? "—"}</div>
+            <div className="stat-unit">Mbps · 整个筛选范围</div></div>
         </div>
       )}
       {stats.daily.length > 1 && (
         <div className="card pad mb16">
-          <div className="chart-title">日均下载对比(最近 {stats.daily.length} 个测试日,悬停查看)</div>
+          <div className="chart-title">已加载记录 · 日均下载对比({stats.daily.length} 个测试日)</div>
           <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 110, padding: "0 4px" }}>
             {(() => {
               const max = Math.max(...stats.daily.map((d) => d.avg), 1);
@@ -274,7 +315,7 @@ export function HistoryPage() {
       {/* 日历热力图 */}
       {rows.length > 0 && (
         <div className="card pad mb16">
-          <div className="chart-title">历史热力图(按天平均下载速度 · 最近 14 周)</div>
+          <div className="chart-title">已加载记录 · 历史热力图(按天平均下载速度 · 最近 14 周)</div>
           <HistoryHeatmap rows={rows} weeks={14} />
         </div>
       )}
@@ -282,7 +323,7 @@ export function HistoryPage() {
       {/* 趋势图 */}
       {trendData.n >= 2 && (
         <div className="card pad mb16">
-          <div className="chart-title">历史速度趋势(最近 {trendData.n} 次成功测试,悬停查看)</div>
+          <div className="chart-title">已加载记录 · 速度趋势(最近 {trendData.n} 次成功测试，时间从左向右)</div>
           <LineChart series={trendSeries} yUnit="Mbps" avgLine height={180} emptyText="暂无足够数据" />
         </div>
       )}
@@ -374,7 +415,7 @@ export function HistoryPage() {
           {rows.length === 0 && (
             <div className="empty">
               <Icon name="history" size={36} />
-              <span>{loading ? "加载中…" : "暂无历史记录 —— 完成一次测速后会自动保存"}</span>
+              <span>{loading ? "加载中…" : invalidRange ? "请先调整日期范围" : loadError ? "历史暂时无法读取，请重试加载" : from || to ? "这个日期范围没有记录，可调整日期或选择全部日期" : "暂无历史记录，完成一次测速后会自动保存"}</span>
             </div>
           )}
         </div>
@@ -449,7 +490,7 @@ function DetailModal({ detail, onClose }: { detail: TestResult; onClose: () => v
         <LineChart series={seriesLat} yUnit="ms" height={150} emptyText="无延迟样本" />
       </div>
 
-      {detail.quality && (
+      {detail.status === "completed" && detail.quality && (
         <>
           <div className="chart-title">质量评级:{detail.quality.rating}({detail.quality.score}/100)</div>
           <ul className="quality-notes mb12">

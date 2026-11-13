@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errMsg, onUpdaterProgress } from "../api";
 import { useApp } from "../store/app";
 import { useServers } from "../store/test";
-import { isCancelError } from "../lib/format";
+import { fmtBytes, isCancelError } from "../lib/format";
 import { ConfirmModal, Segmented } from "../components/ui";
 import { Icon } from "../components/Icon";
 import type { PrometheusStatus, UpdaterInfo } from "../types";
@@ -33,14 +33,19 @@ export function SettingsPage() {
   const [updState, setUpdState] = useState<"idle" | "checking" | "downloading">("idle");
   const [updMessage, setUpdMessage] = useState<string | null>(null);
   const [downPct, setDownPct] = useState<number | null>(null);
+  const [downBytes, setDownBytes] = useState<{ downloaded: number; total: number | null }>({ downloaded: 0, total: null });
 
   useEffect(() => {
     let alive = true;
     let un: (() => void) | null = null;
     onUpdaterProgress((p) => {
       if (!alive) return;
-      if ("done" in p) setDownPct(100);
-      else if (p.total) setDownPct(Math.round((p.downloaded / p.total) * 100));
+      if ("done" in p) {
+        setDownPct(100);
+      } else {
+        setDownBytes({ downloaded: p.downloaded, total: p.total });
+        if (p.total) setDownPct(Math.min(100, Math.round((p.downloaded / p.total) * 100)));
+      }
     }).then((off) => {
       if (!alive) off();
       else un = off;
@@ -69,6 +74,7 @@ export function SettingsPage() {
   const installUpdate = async () => {
     setUpdState("downloading");
     setDownPct(0);
+    setDownBytes({ downloaded: 0, total: null });
     setUpdMessage(null);
     try {
       // 安装成功时应用会被更新器重启,命令不会正常返回;返回即代表失败
@@ -260,11 +266,6 @@ export function SettingsPage() {
               onClick={async () => {
                 const next = !settings.monitor_enabled;
                 await upd({ monitor_enabled: next });
-                try {
-                  await api.monitorSetEnabled(next);
-                } catch (e) {
-                  toast("error", `后台监控开关失败:${String(e)}`);
-                }
               }}
               aria-label="后台监控"
             />
@@ -488,11 +489,47 @@ export function SettingsPage() {
             {updState === "downloading" && (
               <span className="faint" style={{ fontSize: 12 }}>
                 正在下载更新…{downPct != null ? `${downPct}%` : ""}
+                {downBytes.downloaded > 0 && ` · ${fmtBytes(downBytes.downloaded)}${downBytes.total ? ` / ${fmtBytes(downBytes.total)}` : ""}`}
               </span>
             )}
             {updMessage && (
               <span className="faint" style={{ fontSize: 11.5 }}>{updMessage}</span>
             )}
+          </div>
+          {update && (
+            <div className="faint mt8" style={{ fontSize: 11.5, lineHeight: 1.7, whiteSpace: "pre-wrap", maxWidth: 760 }}>
+              {update.pub_date && <>发布时间：{new Date(update.pub_date).toLocaleString()}<br /></>}
+              {update.notes || "该版本没有提供更新说明。"}
+            </div>
+          )}
+          <div className="set-row mt12">
+            <div>
+              <div className="label">自动检查稳定版更新</div>
+              <div className="desc">启动后按间隔检查 GitHub Releases；网络失败不会影响应用启动</div>
+            </div>
+            <button
+              className={`toggle ${settings.auto_update_enabled ? "on" : ""}`}
+              onClick={() => upd({ auto_update_enabled: !settings.auto_update_enabled })}
+              aria-label="自动检查更新"
+            />
+          </div>
+          <div className="set-row">
+            <div>
+              <div className="label">自动检查间隔</div>
+              <div className="desc">仅使用稳定版 Release；Beta/Dev 通道暂未发布</div>
+            </div>
+            <select
+              className="select"
+              value={settings.update_check_interval_hours}
+              onChange={(e) => upd({ update_check_interval_hours: Number(e.target.value) })}
+              disabled={!settings.auto_update_enabled}
+              aria-label="自动检查间隔"
+            >
+              <option value={6}>每 6 小时</option>
+              <option value={24}>每天</option>
+              <option value={72}>每 3 天</option>
+              <option value={168}>每周</option>
+            </select>
           </div>
         </section>
       </div>

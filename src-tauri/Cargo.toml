@@ -1,6 +1,6 @@
 [package]
 name = "netvision-pro"
-version = "1.11.0"
+version = "1.12.0"
 description = "NetVision Pro - 专业级桌面网络测速与诊断软件"
 authors = ["NetVision Pro"]
 edition = "2021"

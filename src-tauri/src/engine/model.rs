@@ -200,6 +200,8 @@ pub struct TestResult {
     /// completed | cancelled | failed
     pub status: String,
     pub error: Option<String>,
+    /// 测量结果与保存结果分开报告，写入失败不改变真实测速状态。
+    pub history_save_error: Option<String>,
 
     pub download_mbps: f64,
     pub download_peak_mbps: f64,
@@ -243,6 +245,7 @@ impl Default for TestResult {
             finished_at: String::new(),
             duration_ms: 0,
             status: "completed".into(),
+            history_save_error: None,
             error: None,
             download_mbps: 0.0,
             download_peak_mbps: 0.0,

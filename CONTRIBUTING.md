@@ -9,6 +9,13 @@
 - Rust stable、MSVC 工具链和 Windows WebView2。
 - Git。
 
+## 分支约定
+
+- `main` 是项目唯一的长期维护分支，也是所有后续更新的目标分支。
+- 开始工作前先同步 `main`：`git switch main`、`git pull --ff-only origin main`。
+- 如因 GitHub PR 或隔离实验需要创建临时分支，合并到 `main` 后应立即删除本地和远程临时分支，不保留长期漂移分支。
+- 发布只从 `main` 上的版本提交创建 `v*` 标签；不要从临时分支或未同步的本地提交发布。
+
 安装依赖并运行开发版：
 
 ```bash

@@ -99,7 +99,7 @@ pub async fn set_settings(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     settings: AppSettings,
-) -> Result<(), String> {
+) -> Result<AppSettings, String> {
     // 并发约束(引擎层还会二次 clamp)
     let mut s = settings;
     s.down_concurrency = s.down_concurrency.clamp(1, 16);
@@ -108,6 +108,7 @@ pub async fn set_settings(
     s.anim_intensity = s.anim_intensity.clamp(0.0, 1.5);
     s.refresh_interval_ms = s.refresh_interval_ms.clamp(200, 5000);
     s.auto_test_interval_minutes = s.auto_test_interval_minutes.clamp(15, 1440);
+    s.update_check_interval_hours = s.update_check_interval_hours.clamp(6, 168);
     if !["dark", "light", "system"].contains(&s.theme.as_str()) {
         s.theme = "dark".into();
     }
@@ -115,20 +116,30 @@ pub async fn set_settings(
         s.node_mode = "auto".into();
     }
 
-    // 写锁贯穿"持久化 → 副作用":并发设置命令串行化(防丢更新),
-    // 且保存失败时不产生任何已生效但未持久化的副作用
     let mut guard = state.settings.settings.write().await;
-    state.settings.save(&s).await?;
-    *guard = s.clone();
+    // 节点列表仅由专用增删命令维护，旧前端完整快照不能将它覆盖。
+    s.custom_nodes = guard.custom_nodes.clone();
 
     // 开机自启动真实生效
     use tauri_plugin_autostart::ManagerExt as _;
     let autolaunch = app.autolaunch();
-    if s.autostart {
-        autolaunch.enable().map_err(|e| e.to_string())?;
+    let previous = if s.autostart != guard.autostart {
+        Some(autolaunch.is_enabled().map_err(|e| e.to_string())?)
     } else {
-        autolaunch.disable().map_err(|e| e.to_string())?;
-    }
+        None
+    };
+    state
+        .settings
+        .save_with_autostart(&s, previous, |enabled| {
+            if enabled {
+                autolaunch.enable()
+            } else {
+                autolaunch.disable()
+            }
+            .map_err(|e| e.to_string())
+        })
+        .await?;
+    *guard = s.clone();
 
     state.monitor.set_enabled(s.monitor_enabled);
 
@@ -144,7 +155,7 @@ pub async fn set_settings(
             connected_getter,
         );
     }
-    Ok(())
+    Ok(s)
 }
 
 #[tauri::command]
@@ -224,9 +235,8 @@ pub async fn servers_set_manual(
     state: tauri::State<'_, AppState>,
     url: String,
 ) -> Result<(), String> {
-    // URL 安全校验(手动节点强制 HTTPS)
-    util::validate_server_url(&url, false)?;
     let mut guard = state.settings.settings.write().await;
+    let url = crate::settings::validate_manual_node(&guard, &url)?;
     let mut s = guard.clone();
     s.node_mode = "manual".into();
     s.default_node_url = url;
@@ -280,6 +290,10 @@ pub async fn servers_remove_custom(
     let mut guard = state.settings.settings.write().await;
     let mut s = guard.clone();
     s.custom_nodes.retain(|c| c.base_url != url);
+    if s.node_mode == "manual" && s.default_node_url == url {
+        s.node_mode = "auto".into();
+        s.default_node_url.clear();
+    }
     let list = s.custom_nodes.clone();
     state.settings.save(&s).await?;
     *guard = s;
@@ -406,6 +420,18 @@ pub async fn history_detail(
 }
 
 #[tauri::command]
+pub async fn history_summary(
+    state: tauri::State<'_, AppState>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<crate::storage::HistorySummary, String> {
+    let storage = state.storage.clone();
+    tauri::async_runtime::spawn_blocking(move || storage.history_summary(from, to))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn history_delete(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
     let storage = state.storage.clone();
     tauri::async_runtime::spawn_blocking(move || storage.delete_history(id))
@@ -427,11 +453,14 @@ pub async fn history_export(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     format: String,
+    from: Option<String>,
+    to: Option<String>,
+    desc: Option<bool>,
 ) -> Result<ExportOutcome, String> {
     let storage = state.storage.clone();
     let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
-        let rows = storage.list_history(None, None, true, 5000)?;
-        let total = storage.history_count()?;
+        let rows = storage.list_history(from.clone(), to.clone(), desc.unwrap_or(true), 5000)?;
+        let total = storage.history_count_filtered(from, to)?;
         Ok::<_, String>((rows, total))
     })
     .await

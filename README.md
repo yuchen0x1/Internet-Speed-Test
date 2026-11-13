@@ -8,9 +8,20 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 [下载最新安装包](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest) · [查看 Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
+## 最新更新
+
+### v1.12.0 · 2026-11-13
+
+- 历史统计覆盖整个日期范围，新增今天、近 7/30 天筛选，CSV/JSON 沿用当前筛选与排序。
+- 修复测速结果保存与界面刷新、节点增删、并发设置、监控状态恢复等问题。
+- 取消测速不再显示完整评级；未知丢包和上传结果保持未知，多次配置损坏保留已有备份。
+- 支持自动检查稳定版更新、查看发布说明与下载字节进度，并要求更新包签名绑定版本号。
+
+完整版本历史见 [发布说明](docs/releases/release-notes.md)。
+
 ## 界面预览
 
-以下界面截图为用户提供的运行素材，截图中的关于页显示 v1.8.0；它们用于展示页面布局，不作为 v1.9.0 的本轮运行证据。
+以下为已有脱敏运行素材，关于页显示 v1.8.0；用于展示布局，不作为 v1.12.0 的验收证据。
 
 | 真实测速 | 网络质量 |
 | --- | --- |
@@ -46,9 +57,17 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 ### 历史与系统集成
 
 - SQLite 本地历史：日期筛选、排序、趋势图、热力图和详情回放。
+- 日期筛选包含结束日期全天，支持今天、近 7/30 天快捷范围；CSV/JSON 沿用当前筛选与排序。
+- 统计卡汇总整个筛选范围，失败/取消不计入速度均值，缺失上传结果显示未知；图表单独标明已加载范围。
 - CSV、JSON 和 HTML 报告导出，支持历史保留策略。
 - 计划测速、网络断开/恢复通知、托盘操作和本地 Prometheus `/metrics` 端点。
 - CLI 与桌面端复用同一测速引擎，可输出完整 JSON。
+
+历史可信度与测速状态改进的研究依据、文件说明及验收边界见 [升级报告](docs/evolution-2026-11-13.md)。
+
+后续发现并修复的设置、节点、订阅、监控和质量分析问题，以及仍待改进的地方，见 [二次 Bug 复查](docs/recheck-2026-11-13.md)。
+
+本机测速截图与原始测试数据保留在本地，不随源码或安装包发布。
 
 ### 官方测速入口
 
@@ -58,7 +77,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 - **系统**：Windows 10/11 x64。
 - **运行依赖**：Windows WebView2；Windows 10/11 通常已预装。
-- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.11.0_x64-setup.exe`。
+- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.12.0_x64-setup.exe`。
 - **安装模式**：Tauri NSIS `currentUser`，默认按当前用户安装，不需要管理员权限。
 - **WebView2 安装**：安装器使用 `downloadBootstrapper` 模式，在缺少运行时的环境中引导安装。
 - **应用内更新**：v1.11.0 起可在「设置与关于 → 关于」点击「检查更新」下载并安装新版本（更新包经 minisign 签名校验，安装完成后自动重启）。
@@ -79,6 +98,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 - [使用指南](docs/usage.md)：按页面说明测速、诊断、拨测、监控、导出和 CLI。
 - [配置与数据](docs/configuration.md)：数据目录、默认设置、隐私开关和 Prometheus。
 - [故障排查](docs/troubleshooting.md)：启动、测速、节点、DNS、IPv6、导出和 CLI 问题。
+- [自动更新](docs/AUTO_UPDATE.md)：更新检查、签名发布、GitHub Secrets、测试与失败处理。
 - [贡献指南](CONTRIBUTING.md)：开发环境、验证命令、代码约定和 PR 要求。
 - [路线图](ROADMAP.md)：已完成能力与后续规划，规划项不等同于当前版本功能。
 - [最终验证报告](docs/verification-report.md)：真实运行页面、截图、构建和测试记录。
@@ -201,33 +221,7 @@ ICMP 可能被目标主机或中间设备限速、丢弃。应用把 HTTP 失败
 
 ## 安全修复
 
-当前前端图标构建依赖 `sharp@0.35.5`，对应的 npm audit 结果为 0 vulnerabilities。Rust 依赖审计（cargo audit）未发现真实漏洞；报告的 `glib` unsound 告警来自非 Windows GTK/WebKit 依赖链，`zbus`/`zvariant`/`proc-macro-error` unmaintained 告警同样来自 Linux 侧或构建期传递依赖，Windows 构建目标不包含这些运行时依赖；项目没有伪造锁文件版本或进行未经验证的大版本迁移。
-
-## v1.11.0
-
-- 应用内自动更新：设置页可一键检查、下载并安装新版本（minisign 签名校验，安装后自动重启）。
-- 推送 `v*` 标签自动构建签名安装包并发布 Release，同时生成更新器所需的 `latest.json`。
-
-## v1.10.0
-
-- 测速历史新增游标分页与“加载更多”，大数据量可完整浏览且并发增删不漂移。
-- 诊断历史支持按类型筛选；监控暂停状态可在页面重载后恢复。
-- CSV 导出全字段转义并中和公式注入；历史统计明确区分已加载条数与筛选总数。
-- 界面可访问性升级：模态框焦点管理、全局焦点环、Ctrl+1..8 快捷导航、页面错误边界。
-- CI 增加格式/严格 lint/依赖审计门禁并固定工具链版本；7 个页面按需加载减小主包体积。
-
-## v1.9.0
-
-- 提高历史数据与导出的可信度：准确计数、CSV 公式注入防护、诊断历史持久化及按类型筛选。
-- 改善监控、Prometheus、测速状态恢复和设置文件写入的可靠性。
-- 增加错误边界、可访问性、键盘快捷导航、历史游标分页和按需页面加载。
-- 加强 Rust 格式/lint 门禁与 CI 依赖审计配置。
-
-## v1.8.0
-
-- 接入 M-Lab NDT7：通过 Locate API v2 动态发现节点，支持 WSS/WS 和真实 WebSocket 下载、上传。
-- 完善 NDT7 令牌与端点边界：敏感信息不进入 IPC、事件、CLI JSON 或历史存储。
-- 优化节点选择、测速过程展示和质量分析，并保留 LibreSpeed、Cloudflare Speed 与自定义节点能力。
+当前前端图标构建依赖 `sharp@0.35.5`。本轮本机 npm audit 查询受网络阻断，不能据此声称零漏洞；Rust 审计退出码为 0，但保留 5 项维护性/unsound 警告。测试与审计边界见 [复查报告](docs/recheck-2026-11-13.md)。更新包使用 minisign 校验及签名版本绑定；Windows 安装器目前没有 Authenticode 证书签名，两者用途不同。
 
 ## 贡献
 

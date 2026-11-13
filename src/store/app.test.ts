@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, onMonitorTick } from "../api";
-import { useApp, useMonitor } from "./app";
-import type { AppSettings } from "../types";
+import { runSettingsMutation, useApp, useMonitor } from "./app";
+import type { AppSettings, MonitorTick } from "../types";
 
 // 隔离 Tauri IPC:仅测 store 的设置更新逻辑,零网络
 vi.mock("../api", () => ({
@@ -14,6 +14,7 @@ vi.mock("../api", () => ({
     monitorPaused: vi.fn(),
     monitorSetPaused: vi.fn(),
     monitorSetEnabled: vi.fn(),
+    monitorHistory: vi.fn(),
   },
   onMonitorTick: vi.fn(),
   onNetStatus: vi.fn(),
@@ -46,13 +47,15 @@ const baseSettings: AppSettings = {
   show_public_ip: true,
   save_diag_history: true,
   close_to_tray: true,
+  auto_update_enabled: true,
+  update_check_interval_hours: 24,
   custom_nodes: [],
 };
 
 describe("updateSettings", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.mocked(api.setSettings).mockReset().mockResolvedValue(undefined);
+    vi.mocked(api.setSettings).mockReset().mockImplementation(async (s) => s);
     useApp.setState({ settings: { ...baseSettings }, toasts: [] });
   });
 
@@ -79,8 +82,8 @@ describe("updateSettings", () => {
   it("并发设置保存按最新完整状态串行写入", async () => {
     let finishFirst!: () => void;
     vi.mocked(api.setSettings)
-      .mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirst = resolve; }))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce((s) => new Promise<AppSettings>((resolve) => { finishFirst = () => resolve(s); }))
+      .mockImplementationOnce(async (s) => s);
 
     const first = useApp.getState().updateSettings({ autostart: true });
     const second = useApp.getState().updateSettings({ monitor_enabled: true });
@@ -90,7 +93,7 @@ describe("updateSettings", () => {
     expect(api.setSettings).toHaveBeenCalledTimes(1);
     expect(vi.mocked(api.setSettings).mock.calls[0][0]).toMatchObject({
       autostart: true,
-      monitor_enabled: true,
+      monitor_enabled: false,
     });
 
     finishFirst();
@@ -100,6 +103,33 @@ describe("updateSettings", () => {
       autostart: true,
       monitor_enabled: true,
     });
+  });
+
+  it("two failed changes to one field never roll back to an uncommitted value", async () => {
+    vi.mocked(api.setSettings).mockRejectedValueOnce(new Error("first")).mockRejectedValueOnce(new Error("second"));
+    const first = useApp.getState().updateSettings({ autostart: true });
+    const second = useApp.getState().updateSettings({ autostart: false });
+    expect(await Promise.all([first, second])).toEqual([false, false]);
+    expect(useApp.getState().settings?.autostart).toBe(false);
+  });
+
+  it("failed later saves preserve the previous committed settings", async () => {
+    const first = useApp.getState().updateSettings({ autostart: true });
+    await first;
+    vi.mocked(api.setSettings).mockRejectedValueOnce(new Error("disk full"));
+    expect(await useApp.getState().updateSettings({ monitor_enabled: true })).toBe(false);
+    expect(useApp.getState().settings).toMatchObject({ autostart: true, monitor_enabled: false });
+  });
+
+  it("accepts backend canonical values and serializes node mutations with settings", async () => {
+    const mutation = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(api.getSettings).mockResolvedValueOnce({ ...baseSettings, node_mode: "manual" });
+    await runSettingsMutation(mutation);
+    await useApp.getState().updateSettings({ theme: "light" });
+    expect(api.setSettings).toHaveBeenLastCalledWith(expect.objectContaining({ node_mode: "manual", theme: "light" }));
+    vi.mocked(api.setSettings).mockResolvedValueOnce({ ...baseSettings, theme: "system" });
+    await useApp.getState().updateSettings({ theme: "dark" });
+    expect(useApp.getState().settings?.theme).toBe("system");
   });
 
   it("persist=false:不调用后端也返回 true", async () => {
@@ -141,5 +171,30 @@ describe("monitor binding", () => {
 
     expect(useMonitor.getState().paused).toBe(false);
     expect(onMonitorTick).toHaveBeenCalledOnce();
+  });
+
+  it("allows retry after subscription failure and shares concurrent binding", async () => {
+    vi.mocked(onMonitorTick).mockRejectedValueOnce(new Error("not ready"));
+    await expect(useMonitor.getState().bind()).rejects.toThrow("not ready");
+    expect(useMonitor.getState().bound).toBe(false);
+    await Promise.all([useMonitor.getState().bind(), useMonitor.getState().bind()]);
+    expect(onMonitorTick).toHaveBeenCalledTimes(2);
+    expect(useMonitor.getState().bound).toBe(true);
+  });
+
+  it("does not show paused when the backend rejects the change", async () => {
+    vi.mocked(api.monitorSetPaused).mockRejectedValueOnce(new Error("not available"));
+    await expect(useMonitor.getState().setPaused(true)).rejects.toThrow("not available");
+    expect(useMonitor.getState().paused).toBe(false);
+  });
+
+  it("merges slow historical backfill without overwriting a newer live tick", async () => {
+    const sample = (ts: number, rx = 10) => ({ ts_ms: ts, rx_bps: rx, tx_bps: 0, rx_total: 0, tx_total: 0, ifaces: [] } as MonitorTick);
+    const live = sample(4000, 99);
+    useMonitor.setState({ buffer: [live], latest: live });
+    vi.mocked(api.monitorHistory).mockResolvedValueOnce([sample(1000), sample(2000), sample(4000, 1)]);
+    await useMonitor.getState().backfill(300);
+    expect(useMonitor.getState().buffer.map(t => t.ts_ms)).toEqual([1000, 2000, 4000]);
+    expect(useMonitor.getState().latest).toEqual(live);
   });
 });

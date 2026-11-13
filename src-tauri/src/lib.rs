@@ -290,6 +290,7 @@ pub fn run() {
             commands::open_speedtest_service,
             commands::history_list,
             commands::history_count,
+            commands::history_summary,
             commands::history_detail,
             commands::history_delete,
             commands::history_clear,

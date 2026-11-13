@@ -31,6 +31,55 @@ pub struct HistoryRow {
     pub status: String,
 }
 
+/// SQL 聚合整个筛选范围，不受列表分页或导出上限影响。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HistorySummary {
+    pub total: u32,
+    pub completed: u32,
+    pub failed: u32,
+    pub cancelled: u32,
+    pub avg_download_mbps: Option<f64>,
+    pub avg_upload_mbps: Option<f64>,
+    pub avg_ping_ms: Option<f64>,
+    pub best_download_mbps: Option<f64>,
+}
+
+/// 日期与库中本地时间一致。日期上界包含整天，旧时间戳调用保留精确边界。
+fn history_bounds(
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    fn bound(value: Option<String>, end: bool) -> Result<Option<String>, String> {
+        let Some(value) = value.filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        if value.len() == 10 {
+            let date = chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .map_err(|_| "无效日期，请使用 YYYY-MM-DD".to_string())?;
+            if date.format("%Y-%m-%d").to_string() != value {
+                return Err("无效日期，请使用 YYYY-MM-DD".into());
+            }
+            return Ok(Some(format!(
+                "{value} {}",
+                if end {
+                    "23:59:59.999999999"
+                } else {
+                    "00:00:00"
+                }
+            )));
+        }
+        chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+            .map_err(|_| "无效日期时间，请使用 YYYY-MM-DD HH:MM:SS".to_string())?;
+        Ok(Some(value))
+    }
+    let from = bound(from, false)?;
+    let to = bound(to, true)?;
+    if from.as_ref().zip(to.as_ref()).is_some_and(|(f, t)| f > t) {
+        return Err("起始日期不能晚于结束日期".into());
+    }
+    Ok((from, to))
+}
+
 /// 诊断历史的列表行(不含完整 detail,避免列表查询搬运大 JSON)
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DiagRunRow {
@@ -249,6 +298,7 @@ impl Storage {
         limit: u32,
         cursor_id: Option<i64>,
     ) -> Result<Vec<HistoryRow>, String> {
+        let (from, to) = history_bounds(from, to)?;
         let conn = crate::safe_lock::lock(&self.conn);
         let mut sql = String::from(
             "SELECT id, created_at, download_mbps, upload_mbps, idle_ping_ms, jitter_ms,
@@ -360,6 +410,7 @@ impl Storage {
         from: Option<String>,
         to: Option<String>,
     ) -> Result<u32, String> {
+        let (from, to) = history_bounds(from, to)?;
         let conn = crate::safe_lock::lock(&self.conn);
         let mut sql = String::from("SELECT COUNT(*) FROM history WHERE 1=1");
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -374,6 +425,41 @@ impl Storage {
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         conn.query_row(&sql, refs.as_slice(), |r| r.get(0))
             .map_err(|e| e.to_string())
+    }
+
+    pub fn history_summary(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+    ) -> Result<HistorySummary, String> {
+        let (from, to) = history_bounds(from, to)?;
+        let conn = crate::safe_lock::lock(&self.conn);
+        conn.query_row(
+            "SELECT COUNT(*),
+                COUNT(CASE WHEN status = 'completed' THEN 1 END),
+                COUNT(CASE WHEN status = 'failed' THEN 1 END),
+                COUNT(CASE WHEN status = 'cancelled' THEN 1 END),
+                AVG(CASE WHEN status = 'completed' THEN download_mbps END),
+                AVG(CASE WHEN status = 'completed' THEN upload_mbps END),
+                AVG(CASE WHEN status = 'completed' THEN idle_ping_ms END),
+                MAX(CASE WHEN status = 'completed' THEN download_mbps END)
+             FROM history WHERE (?1 IS NULL OR created_at >= ?1)
+                AND (?2 IS NULL OR created_at <= ?2)",
+            rusqlite::params![from, to],
+            |r| {
+                Ok(HistorySummary {
+                    total: r.get(0)?,
+                    completed: r.get(1)?,
+                    failed: r.get(2)?,
+                    cancelled: r.get(3)?,
+                    avg_download_mbps: r.get(4)?,
+                    avg_upload_mbps: r.get(5)?,
+                    avg_ping_ms: r.get(6)?,
+                    best_download_mbps: r.get(7)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())
     }
 
     // ---------- 网络诊断历史 ----------
@@ -738,5 +824,106 @@ mod tests {
             )
             .unwrap();
         assert!(miss.is_empty());
+    }
+
+    #[test]
+    fn test_calendar_range_includes_end_day_in_list_count_and_summary() {
+        let s = mem_storage();
+        for time in [
+            "2026-11-06 23:59:59",
+            "2026-11-07 00:00:00",
+            "2026-11-07 23:59:59.123",
+            "2026-11-08 00:00:00",
+        ] {
+            let mut result = sample_result("completed");
+            result.started_at = time.into();
+            s.insert_result(&result).unwrap();
+        }
+        let from = Some("2026-11-07".into());
+        let to = from.clone();
+        let rows = s
+            .list_history(from.clone(), to.clone(), true, 5000)
+            .unwrap();
+        assert_eq!(rows.len(), 2, "同一天的起止日期必须包含午夜和深夜");
+        assert_eq!(
+            s.history_count_filtered(from.clone(), to.clone()).unwrap(),
+            2
+        );
+        assert_eq!(s.history_summary(from, to).unwrap().total, 2);
+        assert_eq!(
+            s.list_history(None, Some("2026-11-07 12:00:00".into()), true, 5000)
+                .unwrap()
+                .len(),
+            2,
+            "旧调用方的精确时间上界不应扩成整天"
+        );
+    }
+
+    #[test]
+    fn test_history_range_rejects_invalid_or_inverted_dates() {
+        let s = mem_storage();
+        for (from, to) in [
+            ("2026-02-29", "2026-03-01"),
+            ("2026-11-08", "2026-11-07"),
+            ("invalid", "2026-11-07"),
+        ] {
+            assert!(s
+                .list_history(Some(from.into()), Some(to.into()), true, 10)
+                .is_err());
+            assert!(s
+                .history_count_filtered(Some(from.into()), Some(to.into()))
+                .is_err());
+            assert!(s
+                .history_summary(Some(from.into()), Some(to.into()))
+                .is_err());
+        }
+        assert!(history_bounds(Some("2028-02-29".into()), None).is_ok());
+        assert_eq!(
+            history_bounds(Some(String::new()), None).unwrap(),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn test_summary_covers_all_pages_and_excludes_incomplete_and_unknown_values() {
+        let s = mem_storage();
+        let empty = s.history_summary(None, None).unwrap();
+        assert_eq!(empty.total, 0);
+        assert!(empty.avg_download_mbps.is_none());
+        for i in 0..125 {
+            let mut result = sample_result("completed");
+            result.download_mbps = i as f64;
+            result.upload_mbps = if i == 0 { Some(0.0) } else { None };
+            s.insert_result(&result).unwrap();
+        }
+        s.insert_result(&sample_result("failed")).unwrap();
+        s.insert_result(&sample_result("cancelled")).unwrap();
+        let mut outside = sample_result("completed");
+        outside.started_at = "2026-11-08 00:00:00".into();
+        outside.download_mbps = 9999.0;
+        s.insert_result(&outside).unwrap();
+        let summary = s
+            .history_summary(Some("2026-11-07".into()), Some("2026-11-07".into()))
+            .unwrap();
+        assert_eq!(summary.total, 127);
+        assert_eq!(summary.completed, 125);
+        assert_eq!((summary.failed, summary.cancelled), (1, 1));
+        assert_eq!(summary.avg_download_mbps, Some(62.0));
+        assert_eq!(summary.best_download_mbps, Some(124.0));
+        assert_eq!(
+            summary.avg_upload_mbps,
+            Some(0.0),
+            "真实零值保留，未知值跳过"
+        );
+        s.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE history SET upload_mbps = NULL", [])
+            .unwrap();
+        assert!(s
+            .history_summary(None, None)
+            .unwrap()
+            .avg_upload_mbps
+            .is_none());
     }
 }

@@ -13,7 +13,8 @@ export const MAX_SAMPLES = 1200;
  * 纯函数,便于单元测试。
  */
 export function appendSpeedSample(samples: [number, number][], mbps: number): [number, number][] {
-  return [...samples.slice(-MAX_SAMPLES), [samples.length * 0.2, mbps]];
+  const nextTime = samples.length ? samples[samples.length - 1][0] + 0.2 : 0;
+  return [...samples.slice(-(MAX_SAMPLES - 1)), [nextTime, mbps]];
 }
 
 interface TestStore {
@@ -43,6 +44,9 @@ interface TestStore {
 }
 
 let elapsedTimer: number | null = null;
+let binding: Promise<void> | null = null;
+let eventRevision = 0;
+let syncSequence = 0;
 
 function stopTimer() {
   if (elapsedTimer != null) {
@@ -73,93 +77,108 @@ export const useTest = create<TestStore>((set, get) => ({
 
   bind: async () => {
     if (get().bound) return;
-    set({ bound: true });
-    await onEngineEvent((ev) => {
-      switch (ev.type) {
-        case "phase": {
-          const running = ev.phase !== "finished" && ev.phase !== "idle";
-          set({
-            phase: ev.phase as Phase,
-            message: ev.message,
-            running,
-            progress: 0,
-            error: null,
-            ...(ev.phase === "preparing"
-              ? { downSamples: [], upSamples: [], latencySamples: [], loadedDown: [], loadedUp: [], downloadedMb: 0, uploadedMb: 0, liveDown: 0, liveUp: 0, result: null }
-              : {}),
-          });
-          stopTimer();
-          if (running) {
-            const t0 = Date.now();
-            elapsedTimer = window.setInterval(
-              () => set((s) => ({ elapsedMs: s.running ? Date.now() - t0 : s.elapsedMs })),
-              200,
-            );
+    if (binding) return binding;
+    binding = (async () => {
+      const offEngine = await onEngineEvent((ev) => {
+        eventRevision++;
+        switch (ev.type) {
+          case "phase": {
+            const running = ev.phase !== "finished" && ev.phase !== "idle";
+            const newRun = ev.phase === "preparing" && !get().running;
+            set({
+              phase: ev.phase as Phase,
+              message: ev.message,
+              running,
+              progress: 0,
+              error: null,
+              ...(newRun
+                ? { elapsedMs: 0, node: null, downSamples: [], upSamples: [], latencySamples: [], loadedDown: [], loadedUp: [], downloadedMb: 0, uploadedMb: 0, liveDown: 0, liveUp: 0, result: null }
+                : {}),
+            });
+            if (!running) stopTimer();
+            if (running && elapsedTimer == null) {
+              const t0 = performance.now() - get().elapsedMs;
+              elapsedTimer = window.setInterval(
+                () => set((s) => ({ elapsedMs: s.running ? performance.now() - t0 : s.elapsedMs })),
+                200,
+              );
+            }
+            break;
           }
-          break;
+          case "server":
+            set({ node: ev.node });
+            break;
+          case "latency":
+            set((s) => ({
+              latencySamples: [...s.latencySamples.slice(-MAX_SAMPLES), [Date.now() % 1e7, ev.rtt_ms]],
+            }));
+            break;
+          case "speed":
+            if (ev.direction === "download") {
+              set((s) => ({
+                liveDown: ev.mbps,
+                downloadedMb: ev.cumulative_mb,
+                downSamples: appendSpeedSample(s.downSamples, ev.mbps),
+              }));
+            } else {
+              set((s) => ({
+                liveUp: ev.mbps,
+                uploadedMb: ev.cumulative_mb,
+                upSamples: appendSpeedSample(s.upSamples, ev.mbps),
+              }));
+            }
+            break;
+          case "loaded_latency":
+            if (ev.direction === "download") {
+              set((s) => ({ loadedDown: [...s.loadedDown.slice(-200), ev.rtt_ms] }));
+            } else {
+              set((s) => ({ loadedUp: [...s.loadedUp.slice(-200), ev.rtt_ms] }));
+            }
+            break;
+          case "progress":
+            set({ progress: ev.percent });
+            break;
+          case "finished":
+            stopTimer();
+            set({
+              running: false,
+              result: ev.result,
+              phase: "finished",
+              progress: ev.result.status === "completed" ? 100 : 0,
+              message: ev.result.status === "completed" ? "测速完成" : ev.result.status === "cancelled" ? "已取消" : "测速失败",
+              liveDown: 0,
+              liveUp: 0,
+              elapsedMs: ev.result.duration_ms,
+              error: ev.result.error,
+            });
+            if (ev.result.history_save_error) useApp.getState().toast("warn", ev.result.history_save_error);
+            break;
+          case "failed":
+            stopTimer();
+            set({ running: false, phase: "finished", error: ev.error, progress: 0 });
+            break;
+          case "cancelled":
+            stopTimer();
+            set({ running: false, phase: "finished", progress: 0, message: "已取消" });
+            break;
         }
-        case "server":
-          set({ node: ev.node });
-          break;
-        case "latency":
-          set((s) => ({
-            latencySamples: [...s.latencySamples.slice(-MAX_SAMPLES), [Date.now() % 1e7, ev.rtt_ms]],
-          }));
-          break;
-        case "speed":
-          if (ev.direction === "download") {
-            set((s) => ({
-              liveDown: ev.mbps,
-              downloadedMb: ev.cumulative_mb,
-              downSamples: appendSpeedSample(s.downSamples, ev.mbps),
-            }));
-          } else {
-            set((s) => ({
-              liveUp: ev.mbps,
-              uploadedMb: ev.cumulative_mb,
-              upSamples: appendSpeedSample(s.upSamples, ev.mbps),
-            }));
-          }
-          break;
-        case "loaded_latency":
-          if (ev.direction === "download") {
-            set((s) => ({ loadedDown: [...s.loadedDown.slice(-200), ev.rtt_ms] }));
-          } else {
-            set((s) => ({ loadedUp: [...s.loadedUp.slice(-200), ev.rtt_ms] }));
-          }
-          break;
-        case "progress":
-          set({ progress: ev.percent });
-          break;
-        case "finished":
-          stopTimer();
-          set({
-            running: false,
-            result: ev.result,
-            phase: "finished",
-            progress: 100,
-            liveDown: 0,
-            liveUp: 0,
-            elapsedMs: ev.result.duration_ms,
-            error: ev.result.error,
-          });
-          break;
-        case "failed":
-          stopTimer();
-          set({ running: false, phase: "finished", error: ev.error, progress: 0 });
-          break;
-        case "cancelled":
-          stopTimer();
-          set({ running: false, phase: "finished", progress: 0, message: "已取消" });
-          break;
+      });
+      try {
+        await onServersProbed((probes: ProbeResult[]) => {
+          useServers.getState().applyProbe(probes);
+        });
+        set({ bound: true });
+      } catch (e) {
+        offEngine();
+        throw e;
       }
-    });
-    await onServersProbed((probes: ProbeResult[]) => {
-      useServers.getState().applyProbe(probes);
-    });
+    })().finally(() => { binding = null; });
+    return binding;
   },
 
-  reset: () =>
+  reset: () => {
+    eventRevision++;
+    stopTimer();
     set({
       phase: "idle",
       message: "",
@@ -177,9 +196,12 @@ export const useTest = create<TestStore>((set, get) => ({
       loadedUp: [],
       result: null,
       error: null,
-    }),
+    });
+  },
 
   syncRunning: async () => {
+    const revision = eventRevision;
+    const sequence = ++syncSequence;
     // 托盘菜单可以直接启动测速,窗口重载也会丢失事件订阅期间的状态:
     // 这两种情况下前端 store 会一直显示 idle,而引擎实际在跑。
     // 以后端的真实运行状态为准做一次对账,不猜测阶段细节(缺失的样本无法补造)。
@@ -193,12 +215,14 @@ export const useTest = create<TestStore>((set, get) => ({
     } catch {
       return; // 查询失败时保持现状,不误改用户可见状态
     }
+    if (revision !== eventRevision || sequence !== syncSequence) return;
     const cur = get();
     if (running && !cur.running) {
       const phase = (["preparing", "latency", "download", "upload", "quality"] as Phase[])
         .includes(backendPhase as Phase)
         ? (backendPhase as Phase)
         : "preparing";
+      get().reset();
       set({
         running: true,
         phase,
@@ -206,9 +230,9 @@ export const useTest = create<TestStore>((set, get) => ({
         error: null,
       });
       if (elapsedTimer == null) {
-        const t0 = Date.now() - cur.elapsedMs;
+        const t0 = performance.now();
         elapsedTimer = window.setInterval(
-          () => set((s) => ({ elapsedMs: s.running ? Date.now() - t0 : s.elapsedMs })),
+          () => set((s) => ({ elapsedMs: s.running ? performance.now() - t0 : s.elapsedMs })),
           200,
         );
       }

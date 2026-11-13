@@ -230,49 +230,41 @@ impl SpeedTestEngine {
             Ok(true) => {
                 result.status = "completed".into();
                 result.quality = Some(quality::analyze_quality(&result));
-                result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                result.duration_ms = t0.elapsed().as_millis() as u64;
-                self.set_phase(sink, TestPhase::Finished, "测速完成");
-                sink.emit(EngineEvent::Finished {
-                    result: Box::new(result.clone()),
-                });
-                if settings.autosave_history {
-                    if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
-                        log::warn!("历史记录写入失败: {e}");
-                    }
-                }
             }
             Ok(false) => {
                 result.status = "cancelled".into();
-                result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                result.duration_ms = t0.elapsed().as_millis() as u64;
-                result.quality = Some(quality::analyze_quality(&result));
-                sink.emit(EngineEvent::Cancelled);
-                sink.emit(EngineEvent::Finished {
-                    result: Box::new(result.clone()),
-                });
-                if settings.autosave_history {
-                    if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
-                        log::warn!("历史记录写入失败: {e}");
-                    }
-                }
+                // 未完成的阶段不能据缺失/默认指标给出完整质量评级。
+                result.quality = None;
             }
             Err(err) => {
                 result.status = "failed".into();
-                result.error = Some(err.clone());
-                result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                result.duration_ms = t0.elapsed().as_millis() as u64;
+                result.error = Some(err);
                 // 失败时丢弃可重新发现的节点缓存:NDT7 社区节点可能已下线,
                 // 下次测速应重新走 Locate 而不是复用同一个死节点。
                 self.registry.invalidate_discovery();
-                sink.emit(EngineEvent::Failed { error: err });
-                if settings.autosave_history {
-                    if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
-                        log::warn!("历史记录写入失败: {e}");
-                    }
-                }
             }
         }
+        result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        result.duration_ms = t0.elapsed().as_millis() as u64;
+        // 所有终态先等待写库，再通知 UI 刷新；失败/取消也携带本次完整结果。
+        // 保存失败仍展示真实测量值，并单独提示，不能伪装成已保存。
+        if settings.autosave_history {
+            if let Err(e) = crate::storage::insert_result_blocking(storage, &result).await {
+                log::warn!("历史记录写入失败: {e}");
+                result.history_save_error =
+                    Some("历史记录保存失败，请检查磁盘空间或数据目录权限".into());
+            }
+        }
+        match result.status.as_str() {
+            "completed" => self.set_phase(sink, TestPhase::Finished, "测速完成"),
+            "cancelled" => sink.emit(EngineEvent::Cancelled),
+            _ => sink.emit(EngineEvent::Failed {
+                error: result.error.clone().unwrap_or_else(|| "测速失败".into()),
+            }),
+        }
+        sink.emit(EngineEvent::Finished {
+            result: Box::new(result.clone()),
+        });
         result
     }
 

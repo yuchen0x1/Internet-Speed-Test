@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 export interface RadarMetric {
   label: string;
   /** 原始值 */
-  value: number;
+  value: number | null;
   /** 满分参考值(超出按 1 截断) */
   max: number;
   /** true 表示该维度越低越好(自动反转) */
@@ -14,14 +14,17 @@ export interface RadarMetric {
   display: string;
 }
 
+export function radarScore(metric: RadarMetric): number | null {
+  if (metric.value == null || !Number.isFinite(metric.value) || metric.max <= 0) return null;
+  const raw = Math.min(1, Math.max(0, metric.value / metric.max));
+  return metric.lowerBetter ? 1 - raw : raw;
+}
+
 export function RadarChart(props: { metrics: RadarMetric[]; size?: number; color?: string }) {
   const { metrics, size = 260, color = "#22d3ee" } = props;
   const ref = useRef<HTMLCanvasElement>(null);
 
-  const scores = metrics.map((m) => {
-    const raw = Math.min(1, Math.max(0, m.value / m.max));
-    return m.lowerBetter ? 1 - raw : raw;
-  });
+  const scores = metrics.map(radarScore);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -76,15 +79,25 @@ export function RadarChart(props: { metrics: RadarMetric[]; size?: number; color
     grad.addColorStop(0, "rgba(34,211,238,.34)");
     grad.addColorStop(1, "rgba(167,139,250,.30)");
     ctx.beginPath();
-    for (let i = 0; i <= n; i++) {
-      const a = ang(i % n);
-      const r = R * Math.max(0.04, scores[i % n]);
-      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    const complete = scores.every((s) => s != null);
+    for (let i = 0; i < n; i++) {
+      const next = (i + 1) % n;
+      const score = scores[i], nextScore = scores[next];
+      if (score == null || nextScore == null) continue;
+      ctx.moveTo(cx + Math.cos(ang(i)) * R * score, cy + Math.sin(ang(i)) * R * score);
+      ctx.lineTo(cx + Math.cos(ang(next)) * R * nextScore, cy + Math.sin(ang(next)) * R * nextScore);
     }
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
+    if (complete) {
+      // 完整指标才填充面积；缺失维度留出断口，不假装满分或零分。
+      ctx.beginPath();
+      scores.forEach((s, i) => {
+        const x = cx + Math.cos(ang(i)) * R * s!, y = cy + Math.sin(ang(i)) * R * s!;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.shadowColor = color;
@@ -93,8 +106,10 @@ export function RadarChart(props: { metrics: RadarMetric[]; size?: number; color
     ctx.shadowBlur = 0;
     // 顶点
     for (let i = 0; i < n; i++) {
+      const score = scores[i];
+      if (score == null) continue;
       const a = ang(i);
-      const r = R * Math.max(0.04, scores[i]);
+      const r = R * score;
       ctx.beginPath();
       ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 3, 0, Math.PI * 2);
       ctx.fillStyle = "#fff";
@@ -102,5 +117,5 @@ export function RadarChart(props: { metrics: RadarMetric[]; size?: number; color
     }
   }, [metrics, scores.join(","), size, color]);
 
-  return <canvas ref={ref} style={{ width: size, height: size }} />;
+  return <canvas ref={ref} role="img" aria-label={metrics.map(m => `${m.label}：${m.display}`).join("；")} style={{ width: size, height: size }} />;
 }

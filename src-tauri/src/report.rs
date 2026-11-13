@@ -13,7 +13,7 @@ fn fmt(v: f64) -> String {
 }
 
 pub fn render_html_report(r: &TestResult) -> String {
-    let quality = r.quality.clone().unwrap_or_default();
+    let quality = r.quality.as_ref().filter(|_| r.status == "completed");
     let mut samples_note = String::new();
     if !r.down_samples.is_empty() {
         samples_note.push_str(&format!(
@@ -124,14 +124,40 @@ ul {{ line-height:1.9; color:#c7d7ef; }}
             .map_or_else(|| "未获取(未授权)".into(), |v| esc(v)),
         isp = r.isp.as_ref().map_or_else(|| "未知".into(), |v| esc(v)),
         samples = samples_note,
-        rating_badge = esc(&quality.rating),
-        score = quality.score,
+        rating_badge = quality
+            .map(|q| esc(&q.rating))
+            .unwrap_or_else(|| "未评级".into()),
+        score = quality
+            .map(|q| q.score.to_string())
+            .unwrap_or_else(|| "—".into()),
         notes = quality
-            .notes
-            .iter()
+            .into_iter()
+            .flat_map(|q| q.notes.iter())
             .map(|n| format!("<li>{}</li>", esc(n)))
             .collect::<Vec<_>>()
             .join(""),
         ver = env!("CARGO_PKG_VERSION"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_cancelled_result_does_not_export_an_excellent_rating() {
+        let result = TestResult {
+            status: "cancelled".into(),
+            quality: Some(crate::engine::model::QualityAssessment {
+                score: 100,
+                rating: "优秀".into(),
+                notes: vec!["legacy rating".into()],
+            }),
+            ..Default::default()
+        };
+        let html = render_html_report(&result);
+        assert!(html.contains("未评级"));
+        assert!(!html.contains("优秀"));
+        assert!(!html.contains("legacy rating"));
+    }
 }

@@ -71,6 +71,12 @@ pub struct AppSettings {
     /// 关闭窗口时最小化到托盘
     pub close_to_tray: bool,
 
+    // ---------- 更新 ----------
+    /// 启动后自动检查稳定版更新
+    pub auto_update_enabled: bool,
+    /// 自动检查间隔(小时,6-168)
+    pub update_check_interval_hours: u32,
+
     // ---------- 自定义节点 ----------
     pub custom_nodes: Vec<ServerNodeInfo>,
 }
@@ -104,6 +110,8 @@ impl Default for AppSettings {
             show_public_ip: false,
             save_diag_history: true,
             close_to_tray: false,
+            auto_update_enabled: true,
+            update_check_interval_hours: 24,
             custom_nodes: Vec::new(),
         }
     }
@@ -121,13 +129,17 @@ impl SettingsManager {
             Ok(text) => match serde_json::from_str::<AppSettings>(&text) {
                 Ok(s) => s,
                 Err(e) => {
-                    // 损坏的设置文件:备份后重置,不再静默丢弃用户配置
-                    log::warn!(
-                        "settings.json 解析失败({e}),已备份为 settings.json.bak 并重置为默认设置"
-                    );
-                    let bak = config_dir.join("settings.json.bak");
-                    let _ = std::fs::remove_file(&bak);
-                    let _ = std::fs::rename(&path, &bak);
+                    // 保留已有备份，多次损坏也不覆盖用户上一次的恢复点。
+                    let mut bak = config_dir.join("settings.json.bak");
+                    let mut suffix = 1u64;
+                    while bak.exists() {
+                        bak = config_dir.join(format!("settings.json.bak.{suffix}"));
+                        suffix += 1;
+                    }
+                    match std::fs::rename(&path, &bak) {
+                        Ok(()) => log::warn!("settings.json 解析失败({e})，已备份并使用默认设置"),
+                        Err(backup_error) => log::warn!("settings.json 解析失败({e})，备份失败({backup_error})；原文件保留，使用默认设置"),
+                    }
                     AppSettings::default()
                 }
             },
@@ -155,14 +167,169 @@ impl SettingsManager {
         Ok(())
     }
 
+    /// 自启动变更失败不落盘；落盘失败则补偿系统状态。调用方持有设置写锁。
+    pub async fn save_with_autostart(
+        &self,
+        settings: &AppSettings,
+        previous: Option<bool>,
+        mut apply: impl FnMut(bool) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let changed = previous.is_some_and(|old| old != settings.autostart);
+        if changed {
+            if let Err(error) = apply(settings.autostart) {
+                return match apply(previous.unwrap()) {
+                    Ok(()) => Err(format!("自启动设置失败，应用设置未保存：{error}")),
+                    Err(rollback) => Err(format!(
+                        "自启动设置失败：{error}；系统状态恢复失败：{rollback}"
+                    )),
+                };
+            }
+        }
+        if let Err(error) = self.save(settings).await {
+            if changed {
+                if let Err(rollback) = apply(previous.unwrap()) {
+                    return Err(format!(
+                        "设置保存失败：{error}；自启动状态恢复失败：{rollback}"
+                    ));
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
 }
 
+/// HTTP 只允许已保存、且用户明确授权的自定义节点。
+pub fn validate_manual_node(settings: &AppSettings, url: &str) -> Result<String, String> {
+    let normalized = crate::engine::util::validate_server_url(url, true)?;
+    let allow_http = settings
+        .custom_nodes
+        .iter()
+        .any(|n| n.allow_http && n.base_url.trim_end_matches('/') == normalized);
+    crate::engine::util::validate_server_url(&normalized, allow_http)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn isolated_manager() -> SettingsManager {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "recheck-settings-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        SettingsManager::load(&dir)
+    }
+
+    #[tokio::test]
+    async fn test_autostart_failure_never_commits_settings() {
+        let manager = isolated_manager();
+        manager.save(&AppSettings::default()).await.unwrap();
+        let original = std::fs::read(manager.path()).unwrap();
+        let next = AppSettings {
+            autostart: true,
+            theme: "light".into(),
+            ..Default::default()
+        };
+        let mut system_enabled = false;
+        let error = manager
+            .save_with_autostart(&next, Some(false), |enabled| {
+                system_enabled = enabled;
+                if enabled {
+                    Err("registry unavailable".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap_err();
+        assert!(error.contains("未保存"));
+        assert!(!system_enabled);
+        assert_eq!(std::fs::read(manager.path()).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn test_disk_failure_restores_autostart_and_keeps_previous_file() {
+        let manager = isolated_manager();
+        manager.save(&AppSettings::default()).await.unwrap();
+        let original = std::fs::read(manager.path()).unwrap();
+        std::fs::create_dir(manager.path().with_extension("json.tmp")).unwrap();
+        let next = AppSettings {
+            autostart: true,
+            ..Default::default()
+        };
+        let mut calls = Vec::new();
+        assert!(manager
+            .save_with_autostart(&next, Some(false), |enabled| {
+                calls.push(enabled);
+                Ok(())
+            })
+            .await
+            .is_err());
+        assert_eq!(calls, vec![true, false]);
+        assert_eq!(std::fs::read(manager.path()).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn test_other_settings_do_not_touch_system_autostart() {
+        let manager = isolated_manager();
+        let next = AppSettings {
+            theme: "light".into(),
+            ..Default::default()
+        };
+        manager
+            .save_with_autostart(&next, None, |_| panic!("unrelated save touched autostart"))
+            .await
+            .unwrap();
+        let saved: AppSettings =
+            serde_json::from_slice(&std::fs::read(manager.path()).unwrap()).unwrap();
+        assert_eq!(saved.theme, "light");
+    }
+
+    #[test]
+    fn test_http_manual_node_requires_saved_explicit_consent() {
+        let mut settings = AppSettings::default();
+        assert!(validate_manual_node(&settings, "http://localhost:8080/").is_err());
+        settings.custom_nodes.push(ServerNodeInfo {
+            base_url: "http://localhost:8080".into(),
+            allow_http: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            validate_manual_node(&settings, "http://localhost:8080/").unwrap(),
+            "http://localhost:8080"
+        );
+        assert!(validate_manual_node(&settings, "http://other.example").is_err());
+        settings.custom_nodes[0].allow_http = false;
+        assert!(validate_manual_node(&settings, "http://localhost:8080").is_err());
+        assert!(validate_manual_node(&settings, "https://example.com/").is_ok());
+    }
+
+    #[test]
+    fn test_repeated_corruption_keeps_existing_backup() {
+        let manager = isolated_manager();
+        let dir = manager.path().parent().unwrap();
+        std::fs::write(dir.join("settings.json.bak"), "previous recovery point").unwrap();
+        std::fs::write(manager.path(), "{ broken config").unwrap();
+        let _ = SettingsManager::load(dir);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("settings.json.bak")).unwrap(),
+            "previous recovery point"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("settings.json.bak.1")).unwrap(),
+            "{ broken config"
+        );
+    }
 
     #[test]
     fn test_roundtrip() {
@@ -186,6 +353,8 @@ mod tests {
         assert_eq!(back.test_duration_secs, 10);
         assert_eq!(back.up_concurrency, 4);
         assert!(back.autosave_history);
+        assert!(back.auto_update_enabled);
+        assert_eq!(back.update_check_interval_hours, 24);
     }
 
     #[test]

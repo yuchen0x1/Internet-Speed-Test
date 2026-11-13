@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "NetVision Pro",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "identifier": "com.netvisionpro.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -46,6 +46,7 @@
   },
   "plugins": {
     "updater": {
+      "requireSignedVersion": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFEQjQwQTI1NkZBNEY2NjUKUldSbDlxUnZKUXEwSGZLTW5NRnR0ZFZHQVJ6bThXY05HM3pVVGxTSVhxTEk0ZGlBWmhmNHA2ZGIK",
       "endpoints": [
         "https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest/download/latest.json"

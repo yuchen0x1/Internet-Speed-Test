@@ -41,6 +41,7 @@ export interface TestResult {
   duration_ms: number;
   status: "completed" | "cancelled" | "failed";
   error: string | null;
+  history_save_error?: string | null;
   download_mbps: number;
   download_peak_mbps: number;
   upload_mbps: number | null;
@@ -94,6 +95,18 @@ export interface HistoryRow {
   public_ip: string | null;
   isp: string | null;
   status: string;
+}
+
+/** 整个日期筛选范围的统计；未知上传值不作为 0 参与均值。 */
+export interface HistorySummary {
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  avg_download_mbps: number | null;
+  avg_upload_mbps: number | null;
+  avg_ping_ms: number | null;
+  best_download_mbps: number | null;
 }
 
 /** 历史导出结果:超出 5000 条上限时 exported < total */
@@ -284,6 +297,8 @@ export interface AppSettings {
   show_public_ip: boolean;
   save_diag_history: boolean;
   close_to_tray: boolean;
+  auto_update_enabled: boolean;
+  update_check_interval_hours: number;
   custom_nodes: ServerNodeInfo[];
 }
 

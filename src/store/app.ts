@@ -65,35 +65,21 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setPage: (p) => set({ page: p }),
 
-  // 返回是否保存成功:乐观更新本地状态,persist 失败时内部弹错误提示并返回 false,
-  // 调用方据此决定是否展示成功提示(如设置页开机自启)。
+  // 保存成功后提交 UI 状态。每个排队操作只合并自己的补丁，
+  // 避免前一个请求提前保存后续补丁，或失败回滚到从未保存过的值。
   updateSettings: async (patch, persist = true) => {
-    const cur = get().settings;
-    if (!cur) return false;
-    const next = { ...cur, ...patch };
-    set({ settings: next });
-    get().applyTheme();
+    if (!get().settings) return false;
     if (persist) {
-      // IPC 接收完整设置对象;串行保存并在轮到本次写入时读取最新状态,避免并发改动互相覆盖。
       const save = settingsSaveQueue.then(async () => {
         const latest = get().settings;
         if (!latest) return false;
+        const next = { ...latest, ...patch };
         try {
-          await api.setSettings(latest);
+          const saved = await api.setSettings(next);
+          set({ settings: saved });
+          get().applyTheme();
           return true;
         } catch (e) {
-          // 仅回滚本次补丁中仍保持原乐观值的字段,不覆盖后续同字段修改。
-          set((state) => {
-            if (!state.settings) return {};
-            const rollback: Partial<AppSettings> = {};
-            for (const key of Object.keys(patch) as (keyof AppSettings)[]) {
-              if (Object.is(state.settings[key], next[key])) {
-                (rollback[key] as AppSettings[typeof key]) = cur[key];
-              }
-            }
-            return { settings: { ...state.settings, ...rollback } };
-          });
-          get().applyTheme();
           get().toast("error", `设置保存失败:${String(e)}`);
           return false;
         }
@@ -101,6 +87,8 @@ export const useApp = create<AppStore>((set, get) => ({
       settingsSaveQueue = save.then(() => undefined);
       return save;
     }
+    set((state) => ({ settings: state.settings ? { ...state.settings, ...patch } : null }));
+    get().applyTheme();
     return true;
   },
 
@@ -129,6 +117,18 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 }));
 
+/** 节点专用命令与普通设置保存共用队列，完成后同步后端权威状态。 */
+export function runSettingsMutation(action: () => Promise<unknown>): Promise<void> {
+  const mutation = settingsSaveQueue.then(async () => {
+    await action();
+    const settings = await api.getSettings();
+    useApp.setState({ settings });
+    useApp.getState().applyTheme();
+  });
+  settingsSaveQueue = mutation.catch(() => undefined);
+  return mutation;
+}
+
 // ------------------------------------------------------------
 // 监控实时数据(ring buffer,1s 粒度,保留 1h)
 // ------------------------------------------------------------
@@ -145,6 +145,8 @@ interface MonitorStore {
 }
 
 const MAX_POINTS = 3600;
+let monitorBinding: Promise<void> | null = null;
+let monitorPauseQueue: Promise<void> = Promise.resolve();
 
 export const useMonitor = create<MonitorStore>((set, get) => ({
   buffer: [],
@@ -154,32 +156,43 @@ export const useMonitor = create<MonitorStore>((set, get) => ({
 
   bind: async () => {
     if (get().bound) return;
-    set({ bound: true });
-    try {
-      set({ paused: await api.monitorPaused() });
-    } catch {
-      // 状态查询不可用时保留本地默认值,事件绑定仍需继续。
-    }
-    await onMonitorTick((tick) => {
-      set((s) => {
-        const buffer = [...s.buffer, tick];
-        if (buffer.length > MAX_POINTS) buffer.splice(0, buffer.length - MAX_POINTS);
-        return { buffer, latest: tick };
+    if (monitorBinding) return monitorBinding;
+    monitorBinding = (async () => {
+      try {
+        set({ paused: await api.monitorPaused() });
+      } catch {
+        // 状态查询不可用时保留本地默认值,事件绑定仍需继续。
+      }
+      await onMonitorTick((tick) => {
+        set((s) => {
+          const buffer = [...s.buffer, tick];
+          if (buffer.length > MAX_POINTS) buffer.splice(0, buffer.length - MAX_POINTS);
+          return { buffer, latest: tick };
+        });
       });
-    });
+      set({ bound: true });
+    })().finally(() => { monitorBinding = null; });
+    return monitorBinding;
   },
 
   setPaused: async (p) => {
-    set({ paused: p });
-    await api.monitorSetPaused(p);
+    const save = monitorPauseQueue.then(async () => {
+      await api.monitorSetPaused(p);
+      set({ paused: p });
+    });
+    monitorPauseQueue = save.catch(() => undefined);
+    return save;
   },
 
   backfill: async (windowSecs) => {
     try {
       const ticks = await api.monitorHistory(windowSecs);
-      if (ticks.length > get().buffer.length) {
-        set({ buffer: ticks.slice(-MAX_POINTS), latest: ticks[ticks.length - 1] ?? null });
-      }
+      set((state) => {
+        // 回填可能晚于实时事件返回。按时间合并，不能用旧响应覆盖刚收到的点。
+        const byTime = new Map([...ticks, ...state.buffer].map((tick) => [tick.ts_ms, tick]));
+        const buffer = [...byTime.values()].sort((a, b) => a.ts_ms - b.ts_ms).slice(-MAX_POINTS);
+        return { buffer, latest: buffer.at(-1) ?? state.latest };
+      });
     } catch {
       /* 忽略回填失败 */
     }

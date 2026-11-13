@@ -9,6 +9,17 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const mockInvoke = vi.mocked(tauriInvoke);
 
+it("passes date and order through history export and retains default whole-history calls", async () => {
+  mockInvoke.mockResolvedValueOnce({ path: "fixture.csv", exported: 2, total: 2 });
+  await api.historyExport("csv", { from: "2026-11-07", to: "2026-11-07", desc: false });
+  expect(mockInvoke).toHaveBeenLastCalledWith("history_export", {
+    format: "csv", from: "2026-11-07", to: "2026-11-07", desc: false,
+  });
+  mockInvoke.mockResolvedValueOnce({ path: "fixture.json", exported: 2, total: 2 });
+  await api.historyExport("json");
+  expect(mockInvoke).toHaveBeenLastCalledWith("history_export", { format: "json", from: null, to: null, desc: true });
+});
+
 describe("invoke 错误规范化", () => {
   it("结构化错误保留 code 与 message", async () => {
     mockInvoke.mockRejectedValueOnce({ code: "invalid_host", message: "无效的域名" });

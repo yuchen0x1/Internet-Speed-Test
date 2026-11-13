@@ -83,7 +83,7 @@ export function SpeedTestPage() {
       case "finished":
         return {
           value: t.result?.download_mbps ?? 0,
-          label: t.result?.status === "cancelled" ? "已取消" : "测速完成",
+          label: t.error || t.result?.status === "failed" ? "测速失败" : t.result?.status === "cancelled" || t.message === "已取消" ? "已取消" : "测速完成",
           unit: "Mbps",
         };
       case "preparing":
@@ -91,7 +91,7 @@ export function SpeedTestPage() {
       default:
         return { value: 0, label: "准备就绪", unit: "Mbps" };
     }
-  }, [t.phase, t.liveDown, t.liveUp, t.latencySamples, t.result]);
+  }, [t.phase, t.liveDown, t.liveUp, t.latencySamples, t.result, t.error, t.message]);
 
   const gaugeMax = useMemo(() => {
     const peak = Math.max(
@@ -183,8 +183,9 @@ export function SpeedTestPage() {
       {/* 阶段时间线 */}
       <div className="phase-track card pad mb16">
         {STEPS.map((s, i) => {
+          const incomplete = t.phase === "finished" && t.result?.status !== "completed";
           const state =
-            t.phase === s.key ? "active" : stepIdx > i || (t.phase === "finished" && t.result) ? "done" : "todo";
+            incomplete ? "todo" : t.phase === s.key ? "active" : stepIdx > i ? "done" : "todo";
           return (
             <React.Fragment key={s.key}>
               {i > 0 && <div className={`phase-line ${state === "done" || (state === "active" && stepIdx > i) ? "lit" : ""}`} />}
@@ -237,6 +238,7 @@ export function SpeedTestPage() {
             </div>
           )}
           {t.error && <div className="test-error">{t.error}</div>}
+          {t.result?.history_save_error && <div className="test-error" role="alert">{t.result.history_save_error}。本次结果尚未保存。</div>}
           {!t.running && !t.error && t.result?.status === "completed" && (
             <div className="row gap8" style={{ justifyContent: "center", marginTop: 12 }}>
               <button

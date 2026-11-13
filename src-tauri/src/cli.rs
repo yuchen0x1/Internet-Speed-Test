@@ -153,6 +153,10 @@ async fn cli_main(flags: CliFlags) -> i32 {
         .await;
     let _ = reader.join();
 
+    if let Some(warning) = &result.history_save_error {
+        eprintln!("[history] {warning}");
+    }
+
     if flags.json {
         match serde_json::to_string_pretty(&result) {
             Ok(s) => println!("{s}"),

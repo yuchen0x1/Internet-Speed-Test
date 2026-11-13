@@ -15,6 +15,7 @@ Windows 桌面版使用 Tauri 的应用数据目录：
 | `settings.json` | 应用设置和自定义节点。 |
 | `history.db` | SQLite 测速历史和详情。 |
 | `settings.json.bak` | 设置文件损坏时，应用自动备份的旧文件。 |
+| `settings.json.bak.1` 等 | 已有备份时使用的后续恢复点，不覆盖较早备份。 |
 
 设置采用原子写入。首次运行或设置文件不存在时使用默认值；解析失败时先备份为 `settings.json.bak`，再恢复默认设置。
 

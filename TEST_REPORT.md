@@ -1,5 +1,13 @@
 # NetVision Pro 测试报告
 
+## 2026-11-13 二次 Bug 复查（未发布）
+
+- PASS：前端 57 项、Rust 68 项（3 项原有网络用例 ignored）、类型检查、生产前端构建、Rust 格式与严格 Clippy。
+- PASS：隔离 Windows 原生 IPC/UI 验证节点快照保护、HTTP 显式授权、删除手动节点回到自动选择、Ping 目标/暂停恢复，以及取消后不评级。
+- PARTIAL：自启动和写入失败补偿使用替代 OS 接口与仓库内隔离文件验证，没有改动真实系统启动项。
+- 已知不足：200ms 高频采样时 3600 点缓冲不足 1 小时；全量图表、长期压力、安装及跨版本更新尚未验收。
+- 详细触发条件、修复和验证边界见 [二次复查报告](docs/recheck-2026-11-13.md)。下文保留历史测试记录。
+
 **测试日期**:2026-11-07(v1.0.0 → v1.1.0 → v1.2.0 → v1.3.0 → v1.4.0 同日迭代,**v1.7.0 增量:国内外知名测速入口 + 实时测速过程舱**)
 **测试环境**:Windows 11(10.0.26340,x64)· 以太网(Realtek Gaming 2.5GbE,协商 1.0 Gbps)· WebView2 157
 **构建**:Tauri 2.12.5 / Rust 1.99.1 MSVC / Node 24.20 / Vite 6.4.5
@@ -9,6 +17,23 @@
 ## 〇-5、2026-11-10 本地升级验证(未发布)
 
 > 本节记录当前未提交工作区的本地验证，不替代历史版本验收记录。
+
+## 〇-6、2026-11-12 自动更新增强验证(未发布)
+
+| 检查 | 命令/证据 | 结果 |
+| --- | --- | --- |
+| 前端单元测试 | `npm test` | ✅ 37 passed / 0 failed |
+| TypeScript | `npm run typecheck` | ✅ |
+| 前端生产构建 | `npm run build` | ✅ |
+| Rust 格式 | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | ✅ |
+| Rust 单元测试 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib` | ✅ 59 passed / 0 failed / 3 ignored |
+| Rust 严格 lint | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | ✅ 0 warning |
+| npm 依赖审计 | `npm audit --audit-level=high --registry=https://registry.npmjs.org` | ✅ 0 vulnerabilities |
+| RustSec 审计 | `cargo audit --file src-tauri/Cargo.lock` | ✅ 退出码 0；0 个漏洞错误，5 个允许的传递依赖维护/健壮性告警 |
+| RustSec 严格模式 | `cargo audit --deny warnings --file src-tauri/Cargo.lock` | ⚠️ 因上述告警失败，不代表发现漏洞 |
+| 在线更新清单 | GitHub Releases `latest.json` | ✅ 当前 `1.11.0`，含 Windows 签名和 HTTPS 下载地址 |
+
+本轮新增启动后稳定版检查、检查间隔设置、更新说明与真实下载字节显示、版本标签一致性校验、同名 Release 拒绝覆盖，以及 [自动更新文档](docs/AUTO_UPDATE.md)。真实下载安装、签名错误拒绝、网络中断恢复和 GUI 人工更新流程仍需 Windows 安装包环境验证。
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |

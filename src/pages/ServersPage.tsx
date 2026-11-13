@@ -1,8 +1,8 @@
 // 测速节点管理:列表/探测/收藏/切换/自定义节点
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { useApp } from "../store/app";
-import { useServers, useTest } from "../store/test";
+import { runSettingsMutation, useApp } from "../store/app";
+import { useServers } from "../store/test";
 import { Modal } from "../components/ui";
 import { NodeRadar } from "../components/NodeRadar";
 import { Icon } from "../components/Icon";
@@ -26,21 +26,18 @@ const CUSTOM_ENDPOINTS = {
 export function ServersPage() {
   const toast = useApp((s) => s.toast);
   const settings = useApp((s) => s.settings);
-  const updateSettings = useApp((s) => s.updateSettings);
   const { nodes, loading, probing, load, refresh } = useServers();
-  const currentNode = useTest((s) => s.node);
   const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const activeUrl = currentNode?.base_url ?? settings?.default_node_url ?? "";
+  const activeUrl = settings?.node_mode === "manual" ? settings.default_node_url : "";
 
   const useNode = async (n: ServerNodeInfo) => {
     try {
-      await api.serversSetManual(n.base_url);
-      await updateSettings({ node_mode: "manual", default_node_url: n.base_url });
+      await runSettingsMutation(() => api.serversSetManual(n.base_url));
       toast("success", `已切换手动节点:${n.name}`);
     } catch (e) {
       toast("error", String(e));
@@ -49,8 +46,7 @@ export function ServersPage() {
 
   const useAuto = async () => {
     try {
-      await api.serversSetAuto();
-      await updateSettings({ node_mode: "auto" });
+      await runSettingsMutation(() => api.serversSetAuto());
       toast("success", "已切换为自动优选(延迟 + 可用性 + 下载能力综合评估)");
     } catch (e) {
       toast("error", String(e));
@@ -68,7 +64,7 @@ export function ServersPage() {
 
   const removeCustom = async (n: ServerNodeInfo) => {
     try {
-      await api.serversRemoveCustom(n.base_url);
+      await runSettingsMutation(() => api.serversRemoveCustom(n.base_url));
       toast("success", "已删除自定义节点");
       load(true);
     } catch (e) {
@@ -206,13 +202,13 @@ function AddNodeModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       // serversAddCustom 只要求 Partial<ServerNodeInfo>,无需整段类型断言
-      await api.serversAddCustom({
+      await runSettingsMutation(() => api.serversAddCustom({
         base_url: url.trim(),
         name: name.trim(),
         provider: "custom",
         allow_http: allowHttp,
         ...CUSTOM_ENDPOINTS,
-      });
+      }));
       toast("success", "节点已添加");
       loadServers(true);
       onClose();

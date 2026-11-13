@@ -47,14 +47,14 @@ export function QualityPage() {
     [result],
   );
 
-  if (!result || result.status === "failed") {
+  if (!result || result.status !== "completed") {
     return (
       <div>
         <Head />
         <div className="card pad">
           <div className="empty">
             <Icon name="wave" size={40} />
-            <span>还没有可分析的质量数据 —— 请先完成一次测速</span>
+            <span>{result?.status === "cancelled" ? "本次测速已取消，未生成完整质量评级；已采集的样本可在历史详情查看。" : "还没有可分析的质量数据 —— 请先完成一次测速"}</span>
             <button className="btn primary mt8" onClick={() => setPage("speedtest")}>
               <Icon name="play" size={14} /> 前往测速
             </button>
@@ -92,7 +92,7 @@ export function QualityPage() {
           </div>
           <div className="rating-label" style={{ color: RATING_COLORS[q?.rating ?? "一般"] }}>{q?.rating ?? "未知"}</div>
           <div className="faint" style={{ fontSize: 11.5 }}>
-            {result.status === "cancelled" ? "基于已取消测试的部分数据" : "综合延迟 / 抖动 / 负载 / 丢包评估"}
+            综合延迟 / 抖动 / 负载 / 丢包评估
           </div>
         </div>
 
@@ -140,9 +140,9 @@ export function QualityPage() {
             const metrics: RadarMetric[] = [
               { label: "延迟", value: idle, max: 200, lowerBetter: true, display: `${idle.toFixed(0)} ms` },
               { label: "抖动", value: result.jitter_ms, max: 30, lowerBetter: true, display: `${result.jitter_ms.toFixed(1)} ms` },
-              { label: "丢包", value: result.packet_loss_percent ?? 0, max: 5, lowerBetter: true, display: result.packet_loss_percent != null ? `${result.packet_loss_percent.toFixed(1)}%` : "未知" },
+              { label: "丢包", value: result.packet_loss_percent, max: 5, lowerBetter: true, display: result.packet_loss_percent != null ? `${result.packet_loss_percent.toFixed(1)}%` : "未知" },
               { label: "下载", value: dl, max: 500, display: `${dl.toFixed(0)} Mbps` },
-              { label: "上传", value: ul, max: 200, display: result.upload_mbps != null ? `${ul.toFixed(0)} Mbps` : "未测" },
+              { label: "上传", value: result.upload_mbps, max: 200, display: result.upload_mbps != null ? `${ul.toFixed(0)} Mbps` : "未测" },
             ];
             return <RadarChart metrics={metrics} size={250} />;
           })()}

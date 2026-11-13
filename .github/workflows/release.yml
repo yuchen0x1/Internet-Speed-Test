@@ -36,6 +36,33 @@ jobs:
       - name: 安装前端依赖
         run: npm ci --registry=https://registry.npmjs.org
 
+      - name: 校验版本号与标签
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const files = ["package.json", "package-lock.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"];
+          const versions = files.map((file) => {
+            const text = fs.readFileSync(file, "utf8");
+            if (file.endsWith("Cargo.lock")) return text.match(/name = "netvision-pro"\s+version = "([^"]+)"/)?.[1];
+            if (file.endsWith("Cargo.toml")) return text.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+            const json = JSON.parse(text);
+            return file === "package-lock.json" ? (json.packages?.[""]?.version ?? json.version) : json.version;
+          });
+          if (versions.some((v) => !v) || new Set(versions).size !== 1) {
+            throw new Error(`版本号不一致: ${versions.join(", ")}`);
+          }
+          const tagVersion = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+          if (versions[0] !== tagVersion) {
+            throw new Error(`标签 ${tagVersion} 与项目版本 ${versions[0]} 不一致`);
+          }
+          console.log(`version=${versions[0]}`);
+          NODE
+
       # minisign 私钥来自 repo secrets;updater.conf.json 启用 createUpdaterArtifacts 生成 .sig
       - name: 构建并签名
         env:
@@ -65,9 +92,11 @@ jobs:
             const version = require("./src-tauri/tauri.conf.json").version;
             const repo = process.env.GITHUB_REPOSITORY;
             const sig = fs.readFileSync(`release-artifacts/NetVision.Pro_${version}_x64-setup.exe.sig`, "utf8").trim();
+            const { execFileSync } = require("child_process");
+            const tagNotes = execFileSync("git", ["tag", "-l", "--format=%(contents)", `v${version}`], { encoding: "utf8" }).trim();
             const latest = {
               version,
-              notes: `NetVision Pro v${version}`,
+              notes: tagNotes || `NetVision Pro v${version}`,
               pub_date: new Date().toISOString(),
               platforms: {
                 "windows-x86_64": {
@@ -77,9 +106,14 @@ jobs:
               },
             };
             fs.writeFileSync("release-artifacts/latest.json", JSON.stringify(latest, null, 2) + "\n");
+            if (!latest.platforms["windows-x86_64"].signature || !latest.platforms["windows-x86_64"].url.startsWith("https://github.com/")) {
+              throw new Error("latest.json 缺少有效签名或 HTTPS GitHub 下载地址");
+            }
             console.log("--- latest.json ---");
             console.log(fs.readFileSync("release-artifacts/latest.json", "utf8"));
           '
+          test -s release-artifacts/latest.json
+          test -s release-artifacts/SHA256SUMS.txt
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # 仅标签触发时发布;workflow_dispatch 干跑只验证构建与签名
@@ -91,13 +125,15 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          # 注释标签(tag -m)即发布说明;空标签消息回退为自动生成
-          NOTES="$(git tag -l --format='%(contents)' "$TAG" | sed -e 's/[[:space:]]*$//')"
-          if [ -n "$NOTES" ]; then
-            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --notes "$NOTES" \
-              || gh release upload "$TAG" --clobber release-artifacts/*
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在；为避免覆盖已有资产，本次发布终止。" >&2
+            exit 1
+          fi
+          # 注释标签(tag -m)即发布说明;空标签消息回退为自动生成。
+          git tag -l --format='%(contents)' "$TAG" > release-notes.txt
+          if [ -s release-notes.txt ] && grep -q '[^[:space:]]' release-notes.txt; then
+            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --notes-file release-notes.txt
           else
-            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --generate-notes \
-              || gh release upload "$TAG" --clobber release-artifacts/*
+            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --generate-notes
           fi
           gh release view "$TAG" --json assets --jq '.assets[].name'

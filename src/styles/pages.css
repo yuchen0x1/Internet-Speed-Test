@@ -550,3 +550,20 @@ html.theme-light .flow-scan { background: radial-gradient(closest-side, rgba(8, 
   .flow-stats { grid-template-columns: repeat(2, 1fr); }
 }
 
+.history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.history-date-label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.history-toolbar input[aria-invalid="true"] { border-color: var(--red); }
+.history-toolbar input[type="date"] { min-width: 140px; color-scheme: dark; }
+.theme-light .history-toolbar input[type="date"] { color-scheme: light; }

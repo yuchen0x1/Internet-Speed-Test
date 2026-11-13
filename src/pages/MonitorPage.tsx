@@ -25,10 +25,12 @@ export function MonitorPage() {
   const [pingHost, setPingHost] = useState("223.5.5.5");
   const [pingSamples, setPingSamples] = useState<PingSample[]>([]);
   const [pingRunning, setPingRunning] = useState(false);
+  const [pingBusy, setPingBusy] = useState(false);
+  const [pingReady, setPingReady] = useState(false);
   const pingRef = useRef<PingSample[]>([]);
 
   useEffect(() => {
-    bind();
+    bind().catch((e) => toast("error", `监控事件连接失败：${String(e)}`));
   }, [bind]);
 
   // 连续 Ping 事件流
@@ -45,8 +47,9 @@ export function MonitorPage() {
     });
     // 恢复既有监测状态(如页面切换回来)
     api.pingmonHost().then((h) => {
-      if (alive && h) setPingRunning(true);
-    });
+      if (alive && h) { setPingHost(h); setPingRunning(true); }
+    }).catch((e) => { if (alive) toast("error", `监测状态读取失败：${String(e)}`); })
+      .finally(() => { if (alive) setPingReady(true); });
     return () => {
       alive = false;
       un?.();
@@ -54,18 +57,22 @@ export function MonitorPage() {
   }, []);
 
   const pingToggle = async () => {
-    if (pingRunning) {
-      await api.pingmonStop();
-      setPingRunning(false);
-      return;
-    }
+    if (pingBusy || !pingReady) return;
+    setPingBusy(true);
     try {
+      if (pingRunning) {
+        await api.pingmonStop();
+        setPingRunning(false);
+        return;
+      }
       await api.pingmonStart(pingHost.trim());
       pingRef.current = [];
       setPingSamples([]);
       setPingRunning(true);
     } catch (e) {
       toast("error", String(e));
+    } finally {
+      setPingBusy(false);
     }
   };
 
@@ -91,7 +98,6 @@ export function MonitorPage() {
   const toggleMonitor = async (on: boolean) => {
     const saved = await updateSettings({ monitor_enabled: on });
     if (!saved) return;
-    await api.monitorSetEnabled(on);
     toast("info", on ? "后台监控已开启" : "后台监控已关闭(不再采样,零开销)");
   };
 
@@ -109,7 +115,7 @@ export function MonitorPage() {
           </div>
         </div>
         <div className="row gap8">
-          <button className="btn" onClick={() => setPaused(!paused)}>
+          <button className="btn" onClick={() => setPaused(!paused).catch((e) => toast("error", `监控状态切换失败：${String(e)}`))}>
             <Icon name={paused ? "play" : "pause"} size={14} />
             {paused ? "恢复" : "暂停"}
           </button>
@@ -167,8 +173,8 @@ export function MonitorPage() {
         <div className="row mb8">
           <div className="chart-title grow" style={{ margin: 0 }}><Icon name="target" size={15} /> 连续 Ping 监测(1s 真实 ICMP)</div>
           <input className="text-input" style={{ width: 220 }} value={pingHost}
-                 onChange={(e) => setPingHost(e.target.value)} placeholder="主机名或 IP" />
-          <button className={`btn sm ${pingRunning ? "danger" : "primary"}`} onClick={pingToggle}>
+                 disabled={pingRunning || pingBusy || !pingReady} onChange={(e) => setPingHost(e.target.value)} placeholder="主机名或 IP" />
+          <button className={`btn sm ${pingRunning ? "danger" : "primary"}`} onClick={pingToggle} disabled={pingBusy || !pingReady}>
             <Icon name={pingRunning ? "stop" : "play"} size={13} />
             {pingRunning ? "停止" : "开始监测"}
           </button>

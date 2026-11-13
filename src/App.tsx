@@ -1,5 +1,6 @@
 // 应用外壳:启动动画 / 主题 / 事件绑定 / 页面路由
 import { lazy, Suspense, useEffect, useState } from "react";
+import { api } from "./api";
 import { useApp } from "./store/app";
 import { useTest } from "./store/test";
 import { TitleBar } from "./components/TitleBar";
@@ -30,7 +31,7 @@ export default function App() {
 
   useEffect(() => {
     boot();
-    bindTest();
+    bindTest().catch((e) => useApp.getState().toast("error", `测速事件连接失败，重新聚焦窗口可重试：${String(e)}`));
     // 跟随系统主题监听
     const mq = window.matchMedia("(prefers-color-scheme: light)");
     const onChange = () => useApp.getState().applyTheme();
@@ -47,11 +48,46 @@ export default function App() {
   // 启动完成时对一次,窗口重新获得焦点时再对一次。
   useEffect(() => {
     if (!booted) return;
-    syncRunning();
-    const onFocus = () => syncRunning();
+    const onFocus = async () => {
+      try {
+        await bindTest();
+        await syncRunning();
+      } catch (e) {
+        useApp.getState().toast("error", `测速事件连接失败：${String(e)}`);
+      }
+    };
+    onFocus();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [booted, syncRunning]);
+  }, [booted, bindTest, syncRunning]);
+
+  // 启动后按用户设置检查一次稳定版更新。时间戳写入本地 WebView 存储，
+  // 避免 StrictMode 重复挂载和频繁启动造成重复请求；检查失败不阻塞应用启动。
+  useEffect(() => {
+    if (!booted || !settings?.auto_update_enabled) return;
+    const intervalMs = Math.max(6, settings.update_check_interval_hours || 24) * 60 * 60 * 1000;
+    const key = "netvision-pro.update.last-check-at";
+    let last = 0;
+    try {
+      last = Number(window.localStorage.getItem(key) ?? 0);
+    } catch {
+      // WebView storage may be unavailable in a restricted profile; update checks remain optional.
+    }
+    if (Number.isFinite(last) && Date.now() - last < intervalMs) return;
+    try {
+      window.localStorage.setItem(key, String(Date.now()));
+    } catch {
+      // Continue with a one-shot check without persistence.
+    }
+    api.updaterCheck().then((update) => {
+      if (update) {
+        useApp.getState().toast("info", `发现稳定版更新 v${update.version}，请前往设置页查看`);
+      }
+    }).catch(() => {
+      // 网络不可用时保持当前版本可用，手动检查仍可在设置页重试。
+      try { window.localStorage.removeItem(key); } catch { /* ignore storage errors */ }
+    });
+  }, [booted, settings?.auto_update_enabled, settings?.update_check_interval_hours]);
 
   useEffect(() => {
     if (!booted) return;
