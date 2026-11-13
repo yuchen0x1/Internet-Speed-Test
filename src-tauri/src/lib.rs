@@ -327,6 +327,8 @@ pub fn run() {
             commands::batchtest_start,
             commands::batchtest_stop,
             commands::batchtest_running,
+            commands::batchtest_snapshot,
+            commands::batchtest_export,
             commands::dns_distribution,
         ])
         .run(tauri::generate_context!())

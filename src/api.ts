@@ -6,6 +6,7 @@ import type {
   AppInfo,
   AppSettings,
   BatchTargetResult,
+  BatchSnapshot,
   DnsDistributionReport,
   ConnectivityEntry,
   DiagRunRow,
@@ -154,6 +155,9 @@ export const api = {
     invoke<number>("batchtest_start", { targets, count }),
   batchtestStop: () => invoke<void>("batchtest_stop"),
   batchtestRunning: () => invoke<boolean>("batchtest_running"),
+  batchtestSnapshot: () => invoke<BatchSnapshot | null>("batchtest_snapshot"),
+  batchtestExport: (runId: number, format: "csv" | "json") =>
+    invoke<string>("batchtest_export", { runId, format }),
   dnsDistribution: (domain: string) =>
     invoke<DnsDistributionReport>("dns_distribution", { domain }),
 };
@@ -199,6 +203,10 @@ export function onUpdaterProgress(
 }
 
 /** 批量拨测事件 */
+export function onBatchUpdate(cb: (snapshot: BatchSnapshot) => void): Promise<UnlistenFn> {
+  return listen<BatchSnapshot>("batchtest://update", (e) => cb(e.payload));
+}
+
 export function onBatchTick(cb: (t: { target: string; rtt_ms: number | null }) => void): Promise<UnlistenFn> {
   return listen<{ target: string; rtt_ms: number | null }>("batchtest://tick", (e) => cb(e.payload));
 }

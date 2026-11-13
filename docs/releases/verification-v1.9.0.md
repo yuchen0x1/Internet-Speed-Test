@@ -1,4 +1,4 @@
-# v1.9.0 最终验证报告
+# v1.9.0 发布验证记录（历史）
 
 **验证日期**：2026-11-09
 **环境**：Windows 11 x64、以太网、Realtek Gaming 2.5GbE、协商速率 1.0 Gbps、WebView2 157，以及已构建的 Tauri release 可执行文件。
@@ -10,14 +10,14 @@
 
 | 页面 | 实际观察 | 截图 |
 | --- | --- | --- |
-| 网络测速 | 已完成真实测速；显示节点、下载 165.7 Mbps、上传 68.93 Mbps、延迟 169.8 ms、抖动 1.9 ms 和阶段结果。 | [speedtest-verified.png](screenshots/speedtest-verified.png) |
-| 网络质量 | 显示 0/100 质量评分、空闲/下载/上传负载延迟、抖动、30% ICMP 丢包和动态说明。 | [quality-verified.png](screenshots/quality-verified.png) |
-| 网络诊断 | 显示网卡、网关、DNS、MTU、公网信息以及 DNS/TCP/HTTPS/IPv6/NAT/路由检测入口。 | [diagnostics-verified.png](screenshots/diagnostics-verified.png) |
-| 测速历史 | 显示 15 次完成测试、平均下载/上传/延迟、日均对比、热力图和历史表格。 | [history-verified.png](screenshots/history-verified.png) |
-| 测速节点 | 显示 Cloudflare、LibreSpeed、M-Lab NDT7 节点、探测延迟和可用/不可达状态。 | [servers-verified.png](screenshots/servers-verified.png) |
-| 批量拨测 | 显示 6 个目标、最快/最慢/整体平均、目标表格和 DNS 分布入口；现场读取到整体平均 31 ms。 | [batchtest-verified.png](screenshots/batchtest-verified.png) |
-| 网络监控 | 显示 1 秒网卡采样、收发速率、累计流量、后台监控状态、时间窗口和连续 Ping 入口。 | [monitor-verified.png](screenshots/monitor-verified.png) |
-| 设置与关于 | 显示主题、测速参数、并发、后台监控、计划测速、通知、告警、Prometheus、隐私和历史保留设置。 | [settings-verified.png](screenshots/settings-verified.png) |
+| 网络测速 | 已完成真实测速；显示节点、下载 165.7 Mbps、上传 68.93 Mbps、延迟 169.8 ms、抖动 1.9 ms 和阶段结果。 | [speedtest-verified.png](../screenshots/speedtest-verified.png) |
+| 网络质量 | 显示 0/100 质量评分、空闲/下载/上传负载延迟、抖动、30% ICMP 丢包和动态说明。 | [quality-verified.png](../screenshots/quality-verified.png) |
+| 网络诊断 | 显示网卡、网关、DNS、MTU、公网信息以及 DNS/TCP/HTTPS/IPv6/NAT/路由检测入口。 | [diagnostics-verified.png](../screenshots/diagnostics-verified.png) |
+| 测速历史 | 显示 15 次完成测试、平均下载/上传/延迟、日均对比、热力图和历史表格。 | [history-verified.png](../screenshots/history-verified.png) |
+| 测速节点 | 显示 Cloudflare、LibreSpeed、M-Lab NDT7 节点、探测延迟和可用/不可达状态。 | [servers-verified.png](../screenshots/servers-verified.png) |
+| 批量拨测 | 显示 6 个目标、最快/最慢/整体平均、目标表格和 DNS 分布入口；现场读取到整体平均 31 ms。 | [batchtest-verified.png](../screenshots/batchtest-verified.png) |
+| 网络监控 | 显示 1 秒网卡采样、收发速率、累计流量、后台监控状态、时间窗口和连续 Ping 入口。 | [monitor-verified.png](../screenshots/monitor-verified.png) |
+| 设置与关于 | 显示主题、测速参数、并发、后台监控、计划测速、通知、告警、Prometheus、隐私和历史保留设置。 | [settings-verified.png](../screenshots/settings-verified.png) |
 
 ## 构建与测试
 

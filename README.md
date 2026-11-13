@@ -10,18 +10,18 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 ## 最新更新
 
-### v1.12.0 · 2026-11-13
+### v1.13.0 · 2026-11-13
 
-- 历史统计覆盖整个日期范围，新增今天、近 7/30 天筛选，CSV/JSON 沿用当前筛选与排序。
-- 修复测速结果保存与界面刷新、节点增删、并发设置、监控状态恢复等问题。
-- 取消测速不再显示完整评级；未知丢包和上传结果保持未知，多次配置损坏保留已有备份。
-- 支持自动检查稳定版更新、查看发布说明与下载字节进度，并要求更新包签名绑定版本号。
+- 拨测支持任务隔离、重载恢复、目标去重与 8 路并发；按真实包数展示进度，停止保留部分结果。
+- 支持拨测 CSV/JSON 导出，未测目标保持未知，超时曲线断开显示。
+- Prometheus 使用最近成功测速值，修正时间与历史计数类型，新增完成/失败/取消 Gauge。
+- [研究、原生截图、测试与剩余边界](docs/evolution-batch-metrics-2026-11-13.md)。本版仅提供 Windows 10/11 x64 电脑版。
 
-完整版本历史（含公开版本与早期开发记录）见 [发布说明](docs/releases/release-notes.md)。
+当前公开稳定版为 [v1.13.0](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.13.0)。完整版本历史、升级方式与早期开发记录见 [发布说明](docs/releases/release-notes.md)。
 
 ## 界面预览
 
-以下为已有脱敏运行素材，关于页显示 v1.8.0；用于展示布局，不作为 v1.12.0 的验收证据。
+以下为已有脱敏运行素材，关于页显示 v1.8.0；用于展示布局，不作为当前版本的验收证据。
 
 | 真实测速 | 网络质量 |
 | --- | --- |
@@ -35,7 +35,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 | --- | --- |
 | ![测速节点](docs/screenshots/servers-verified.png) | ![批量拨测](docs/screenshots/batchtest-verified.png) |
 
-更多运行记录见 [截图目录](docs/screenshots/) 和 [最终验证报告](docs/verification-report.md)。
+更多运行记录见 [截图目录](docs/screenshots/) 和 [v1.9.0 历史验证记录](docs/releases/verification-v1.9.0.md)。
 
 ## 功能
 
@@ -77,7 +77,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 - **系统**：Windows 10/11 x64。
 - **运行依赖**：Windows WebView2；Windows 10/11 通常已预装。
-- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.12.0_x64-setup.exe`。
+- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.13.0_x64-setup.exe`。
 - **安装模式**：Tauri NSIS `currentUser`，默认按当前用户安装，不需要管理员权限。
 - **WebView2 安装**：安装器使用 `downloadBootstrapper` 模式，在缺少运行时的环境中引导安装。
 - **应用内更新**：v1.11.0 起可在「设置与关于 → 关于」点击「检查更新」下载并安装新版本（更新包经 minisign 签名校验，安装完成后自动重启）。
@@ -101,7 +101,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 - [自动更新](docs/AUTO_UPDATE.md)：更新检查、签名发布、GitHub Secrets、测试与失败处理。
 - [贡献指南](CONTRIBUTING.md)：开发环境、验证命令、代码约定和 PR 要求。
 - [路线图](ROADMAP.md)：已完成能力与后续规划，规划项不等同于当前版本功能。
-- [最终验证报告](docs/verification-report.md)：真实运行页面、截图、构建和测试记录。
+- [v1.9.0 历史验证记录](docs/releases/verification-v1.9.0.md)：真实运行页面、截图、构建和测试记录。
 
 ## CLI
 
@@ -221,7 +221,7 @@ ICMP 可能被目标主机或中间设备限速、丢弃。应用把 HTTP 失败
 
 ## 安全修复
 
-当前前端图标构建依赖 `sharp@0.35.5`。本轮本机 npm audit 查询受网络阻断，不能据此声称零漏洞；Rust 审计退出码为 0，但保留 5 项维护性/unsound 警告。测试与审计边界见 [复查报告](docs/recheck-2026-11-13.md)。更新包使用 minisign 校验及签名版本绑定；Windows 安装器目前没有 Authenticode 证书签名，两者用途不同。
+当前前端图标构建依赖 `sharp@0.35.5`。2026-11-13 本轮官方源 npm audit 退出 0、当前漏洞计数 0；Rust 审计退出 0，但保留 5 项维护性/unsound 告警。测试与审计边界见 [本轮验收报告](docs/evolution-batch-metrics-2026-11-13.md)。更新包使用 minisign 校验及签名版本绑定；Windows 安装器目前没有 Authenticode 证书签名，两者用途不同。
 
 ## 贡献
 

@@ -25,6 +25,8 @@ npm run tauri dev
 
 ## 提交前验证
 
+版本更新日志统一维护在 `docs/releases/release-notes.md`。修改后运行 `npm run docs:sync` 生成根目录 `CHANGELOG.md`，再运行 `npm run docs:check` 检查镜像、版本锚点与本地链接；CI 同样检查，避免两份日志漂移。README 的“最新更新”只保留最新一个版本块，未发布内容必须明确标注。
+
 修改前端：
 
 ```bash
@@ -60,9 +62,13 @@ npm run tauri build
 - `node_modules/` 是开发依赖，`dist/`、`src-tauri/target/debug/` 和 `src-tauri/target/release/` 是可重建产物。依赖安装和构建流程会重新生成它们。
 - 清理构建产物前，先停止本项目的构建或调试任务，并核实目录内没有手动保存的数据。其他 `target/` 子目录可能包含隔离验收的数据库、设置及备份，不能整目录盲删。
 - `.autonomous-upgrade/`、`.evolution/` 和驱动生成的 `NVIDIA Corporation/` 只用于本地；过期的临时报告、下载副本及验证脚本在核实用途后清理。
+- 构建目录清理时可保留最新 `src-tauri/target/release/netvision-pro.exe` 和仍需使用的安装包。隔离数据库、设置及恢复副本单独保留；正式 `%APPDATA%` 数据目录不属于项目垃圾清理范围。
+- 本地签名操作说明与密钥用途核实后再处理，不因它们位于临时目录就删除。优先把确认无用的文件移入 Windows 回收站，保留恢复机会。
+- `release-artifacts/`、根目录 `release-notes.txt` 是发布工作流的临时输出，测试覆盖率、浏览器报告和 `.nvwork/` 也不入库。GitHub Release 中的安装包、签名、更新清单和校验文件是正式分发资产，应保留。
 - `.env`、私钥、签名密码、数据库、应用设置及恢复备份不入库；清理时保留仍需使用的配置、历史和签名资料。
 - `docs/screenshots/` 只提交已人工检查、已脱敏并以 `-verified.png` 结尾的图片。仅修改文件名不等于完成脱敏。
 - 保留当前使用指南、配置说明、版本更新日志、发布验证和必要的历史依据；过期审计快照及已被后续报告取代的临时计划不作为当前待办。
+- 已整合的旧测试汇总和重复日志可从固定历史提交查阅，不必在工作目录再维护一份。本轮清理不重写 Git 历史，也不自动删除远端 Release 或附件。
 
 ## 代码约定
 

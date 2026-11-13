@@ -58,7 +58,16 @@ http://127.0.0.1:9876/metrics
 
 端口可改为 1024–65535。端点只绑定本机回环地址，不对局域网开放。修改端口或开关后，应用会自动应用新的端点状态。
 
-指标来自本地历史和网络状态，包括测试总数、最近一次下载/上传/延迟、网络连接状态等。应用未开启该设置时，不会启动端点。
+指标来自本地历史和网络状态。应用未开启该设置时，不会启动端点。
+
+- `netvision_tests_total`：现存历史总条数（包括失败、取消），TYPE 为 gauge；删除和保留策略会使它下降，不要使用 rate/increase。
+- `netvision_history_completed`、`netvision_history_failed`、`netvision_history_cancelled`：各状态现存条数，均为 gauge。
+- `netvision_last_*`：最近成功测速的速度、延迟、抖动、丢包和时间；未知上传/丢包省略。连续失败时保留上次成功值，请结合 timestamp 和失败条数判断新鲜度。
+- `netvision_last_test_timestamp` 为 Unix 秒数，旧本地时间按本地时区转换；无法确定时省略样本。
+
+兼容提示：v1.13.0 修正了计数的 TYPE（原来误标 counter）和最近值口径，现有 Grafana 查询应按上述说明复查。见 [本轮报告](evolution-batch-metrics-2026-11-13.md)。
+
+HTTP 只提供 GET `/metrics`，错误路径 404、非 GET 405、读取历史库失败 503。最多处理 16 个并发请求，超额连接直接关闭；头上限 8KiB、读头超时 2 秒、整体处理上限 5 秒。
 
 ## 隐私开关
 

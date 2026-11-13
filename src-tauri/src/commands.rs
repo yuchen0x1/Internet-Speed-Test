@@ -1048,6 +1048,77 @@ pub fn batchtest_running(state: tauri::State<AppState>) -> bool {
 }
 
 #[tauri::command]
+pub fn batchtest_snapshot(
+    state: tauri::State<AppState>,
+) -> Option<crate::batchtest::BatchSnapshot> {
+    state.batchtest.snapshot()
+}
+
+fn batch_csv(snapshot: &crate::batchtest::BatchSnapshot) -> String {
+    let mut csv = String::from("\u{feff}开始时间,状态,目标,计划包数,已发包,收到,丢包率 %,最快 ms,最慢 ms,平均 ms,最新 ms,样本 ms (null=超时)\r\n");
+    for target in &snapshot.targets {
+        let r = snapshot.results.iter().find(|r| &r.target == target);
+        let sent = r.map_or(0, |r| r.sent);
+        csv.push_str(
+            &[
+                csv_field(&snapshot.started_at),
+                csv_field(if snapshot.cancelled {
+                    "cancelled"
+                } else {
+                    "completed"
+                }),
+                csv_field(target),
+                snapshot.count.to_string(),
+                sent.to_string(),
+                r.map_or(0, |r| r.recv).to_string(),
+                r.filter(|_| sent > 0)
+                    .map_or_else(String::new, |r| fmt2(r.loss_percent)),
+                r.and_then(|r| r.min_ms).map_or_else(String::new, fmt2),
+                r.and_then(|r| r.max_ms).map_or_else(String::new, fmt2),
+                r.and_then(|r| r.avg_ms).map_or_else(String::new, fmt2),
+                r.and_then(|r| r.latest_ms).map_or_else(String::new, fmt2),
+                csv_field(&r.map_or_else(
+                    || "[]".into(),
+                    |r| serde_json::to_string(&r.samples).unwrap_or_default(),
+                )),
+            ]
+            .join(","),
+        );
+        csv.push_str("\r\n");
+    }
+    csv
+}
+
+#[tauri::command]
+pub async fn batchtest_export(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    run_id: u64,
+    format: String,
+) -> Result<String, String> {
+    let snapshot = state.batchtest.snapshot().ok_or("没有可导出的拨测")?;
+    if snapshot.run_id != run_id || snapshot.running {
+        return Err("拨测仍在运行或结果已更新，请等待结束后重试".into());
+    }
+    let (content, name, filters) = match format.as_str() {
+        "csv" => (
+            batch_csv(&snapshot),
+            "netvision_batch.csv",
+            vec![("CSV 文件", &["csv"][..])],
+        ),
+        "json" => (
+            serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?,
+            "netvision_batch.json",
+            vec![("JSON 文件", &["json"][..])],
+        ),
+        _ => return Err("不支持的导出格式".into()),
+    };
+    let path = save_via_dialog(app, name, filters).await?;
+    std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
+    Ok(path)
+}
+
+#[tauri::command]
 pub async fn dns_distribution(
     domain: String,
 ) -> Result<crate::batchtest::DnsDistributionReport, String> {
@@ -1235,5 +1306,33 @@ mod tests {
         assert!(speedtest_service_url("../../etc/passwd").is_none());
         assert!(speedtest_service_url("file:///C:/Windows").is_none());
         assert!(speedtest_service_url("ookla; shutdown").is_none());
+    }
+    #[test]
+    fn batch_export_preserves_partial_and_unmeasured_targets() {
+        let snapshot = crate::batchtest::BatchSnapshot {
+            run_id: 1,
+            started_at: "2026-11-13T12:00:00+08:00".into(),
+            revision: 1,
+            running: false,
+            cancelled: true,
+            count: 10,
+            targets: vec!["localhost".into(), "queued.test".into()],
+            results: vec![crate::batchtest::BatchTargetResult {
+                target: "localhost".into(),
+                sent: 2,
+                recv: 1,
+                loss_percent: 50.0,
+                min_ms: Some(1.0),
+                max_ms: Some(1.0),
+                avg_ms: Some(1.0),
+                latest_ms: None,
+                samples: vec![Some(1.0), None],
+            }],
+        };
+        let csv = batch_csv(&snapshot);
+        assert!(csv.starts_with('\u{feff}'));
+        assert!(csv.contains("cancelled,localhost,10,2,1,50.00"));
+        assert!(csv.contains("[1.0,null]"));
+        assert!(csv.contains("cancelled,queued.test,10,0,0,,,,,,[]"));
     }
 }

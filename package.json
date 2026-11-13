@@ -1,10 +1,12 @@
 {
   "name": "netvision-pro",
   "private": true,
-  "version": "1.12.0",
+  "version": "1.13.0",
   "description": "NetVision Pro - 专业级桌面网络测速与诊断软件",
   "type": "module",
   "scripts": {
+    "docs:sync": "node scripts/sync-release-notes.mjs --write",
+    "docs:check": "node scripts/sync-release-notes.mjs --check",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",

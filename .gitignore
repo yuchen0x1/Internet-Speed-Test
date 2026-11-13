@@ -8,6 +8,16 @@
 /.autonomous-upgrade/
 /.evolution/
 /NVIDIA Corporation/
+/.nvwork/
+/.cache/
+/coverage/
+/test-results/
+/playwright-report/
+
+# Release workflow staging (published assets belong on GitHub Releases)
+/release-artifacts/
+/release-notes.txt
+*.tsbuildinfo
 
 # Credentials and local environment (keep shareable examples)
 .env

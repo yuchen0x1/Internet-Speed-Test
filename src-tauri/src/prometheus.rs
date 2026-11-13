@@ -16,8 +16,8 @@ pub fn build_metrics_text(
     connected: bool,
 ) -> String {
     let mut s = String::new();
-    s.push_str("# HELP netvision_tests_total Total completed speed tests\n");
-    s.push_str("# TYPE netvision_tests_total counter\n");
+    s.push_str("# HELP netvision_tests_total Stored speed test records (all statuses; decreases on deletion)\n");
+    s.push_str("# TYPE netvision_tests_total gauge\n");
     s.push_str(&format!("netvision_tests_total {tests_total}\n"));
     s.push_str("# HELP netvision_network_connected Network currently connected\n");
     s.push_str("# TYPE netvision_network_connected gauge\n");
@@ -25,7 +25,7 @@ pub fn build_metrics_text(
         "netvision_network_connected {}\n",
         if connected { 1 } else { 0 }
     ));
-    if let Some(r) = latest {
+    if let Some(r) = latest.filter(|r| r.status == "completed") {
         s.push_str("# HELP netvision_last_download_mbps Last download speed (Mbps)\n");
         s.push_str("# TYPE netvision_last_download_mbps gauge\n");
         s.push_str(&format!(
@@ -50,15 +50,110 @@ pub fn build_metrics_text(
         }
         s.push_str("# HELP netvision_last_test_timestamp Last test Unix timestamp (seconds)\n");
         s.push_str("# TYPE netvision_last_test_timestamp gauge\n");
-        // created_at 为本地时间字符串,转时间戳
-        if let Ok(ts) = chrono::NaiveDateTime::parse_from_str(&r.created_at, "%Y-%m-%d %H:%M:%S") {
-            s.push_str(&format!(
-                "netvision_last_test_timestamp {}\n",
-                ts.and_utc().timestamp()
-            ));
+        if let Some(ts) = local_timestamp(&r.created_at, &chrono::Local) {
+            s.push_str(&format!("netvision_last_test_timestamp {ts}\n"));
         }
     }
     s
+}
+
+fn local_timestamp<T: chrono::TimeZone>(value: &str, zone: &T) -> Option<i64> {
+    // Newer offset-bearing records are unambiguous; legacy records use local time.
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(ts.timestamp());
+    }
+    let ts = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").ok()?;
+    // Omit ambiguous/nonexistent DST times rather than inventing an instant.
+    zone.from_local_datetime(&ts)
+        .single()
+        .map(|ts| ts.timestamp())
+}
+
+fn scrape_text(snapshot: &crate::storage::HistoryMetrics, connected: bool) -> String {
+    let mut text = build_metrics_text(snapshot.latest.as_ref(), snapshot.total as u64, connected);
+    for (status, count) in [
+        ("completed", snapshot.completed),
+        ("failed", snapshot.failed),
+        ("cancelled", snapshot.cancelled),
+    ] {
+        text.push_str(&format!("# HELP netvision_history_{status} Stored {status} speed tests\n# TYPE netvision_history_{status} gauge\nnetvision_history_{status} {count}\n"));
+    }
+    text
+}
+
+fn request_status(header: &str) -> u16 {
+    let mut parts = header.lines().next().unwrap_or_default().split_whitespace();
+    let (Some(method), Some(target), Some(version)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return 400;
+    };
+    if parts.next().is_some() || !matches!(version, "HTTP/1.0" | "HTTP/1.1") {
+        return 400;
+    }
+    if method != "GET" {
+        return 405;
+    }
+    if target.split('?').next() != Some("/metrics") {
+        return 404;
+    }
+    200
+}
+
+async fn respond(sock: &mut tokio::net::TcpStream, status: u16, body: &str) {
+    use tokio::io::AsyncWriteExt;
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        431 => "Request Header Fields Too Large",
+        _ => "Service Unavailable",
+    };
+    let allow = if status == 405 { "Allow: GET\r\n" } else { "" };
+    let response = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\n{allow}Connection: close\r\n\r\n{body}", body.len());
+    let _ = sock.write_all(response.as_bytes()).await;
+    let _ = sock.shutdown().await;
+}
+
+async fn serve(
+    mut sock: tokio::net::TcpStream,
+    storage: Arc<Storage>,
+    connected: Arc<dyn Fn() -> bool + Send + Sync>,
+) {
+    use tokio::io::AsyncReadExt;
+    let header = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut header = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            let n = sock.read(&mut chunk).await.map_err(|_| 400u16)?;
+            if n == 0 {
+                return Err(400u16);
+            }
+            header.extend_from_slice(&chunk[..n]);
+            if header.len() > 8192 {
+                return Err(431u16);
+            }
+            if header.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                return String::from_utf8(header).map_err(|_| 400u16);
+            }
+        }
+    })
+    .await;
+    let status = match &header {
+        Ok(Ok(header)) => request_status(header),
+        Ok(Err(code)) => *code,
+        Err(_) => 408,
+    };
+    if status != 200 {
+        respond(&mut sock, status, "Invalid metrics request\n").await;
+        return;
+    }
+    // Storage failure must fail the scrape, never fabricate an empty database.
+    match tokio::task::spawn_blocking(move || storage.metrics_snapshot()).await {
+        Ok(Ok(snapshot)) => respond(&mut sock, 200, &scrape_text(&snapshot, connected())).await,
+        _ => respond(&mut sock, 503, "Metrics storage unavailable\n").await,
+    }
 }
 
 struct PromInner {
@@ -150,7 +245,6 @@ impl PrometheusHandle {
                     // 同时把原因记入 last_error,设置页据此显示真实失败信息。
                     let mut g = crate::safe_lock::lock(&slot);
                     if !token.is_cancelled() {
-                        g.enabled = false;
                         g.listening = false;
                         g.token = None;
                         g.last_error = Some(format!("端口 {port} 绑定失败: {e}"));
@@ -168,48 +262,19 @@ impl PrometheusHandle {
                 g.last_error = None;
             }
             log::info!("Prometheus 指标端点已启动: http://{addr}/metrics");
+            let slots = Arc::new(tokio::sync::Semaphore::new(16));
             loop {
                 tokio::select! {
                     _ = token.cancelled() => break,
                     accepted = listener.accept() => {
-                        let Ok((mut sock, _)) = accepted else { continue };
+                        let Ok((sock, _)) = accepted else { continue };
+                        // Drop excess sockets instead of spawning an unbounded queue.
+                        let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
                         let storage = storage.clone();
                         let connected = connected_getter.clone();
                         tauri::async_runtime::spawn(async move {
-                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                            let mut buf = [0u8; 1024];
-                            // 读请求头(一小段即可)
-                            let _ = tokio::time::timeout(
-                                std::time::Duration::from_secs(2),
-                                sock.read(&mut buf),
-                            ).await;
-                            let req = String::from_utf8_lossy(&buf);
-                            let body = if req.starts_with("GET /metrics") {
-                                // 查询放阻塞线程池:抓取路径不占用 tokio 工作线程
-                                let (latest, total) = {
-                                    let storage = storage.clone();
-                                    tokio::task::spawn_blocking(move || {
-                                        let latest = storage
-                                            .list_history(None, None, true, 1)
-                                            .ok()
-                                            .and_then(|v| v.first().cloned());
-                                        let total =
-                                            storage.history_count().unwrap_or(0) as u64;
-                                        (latest, total)
-                                    })
-                                    .await
-                                    .unwrap_or((None, 0))
-                                };
-                                build_metrics_text(latest.as_ref(), total, connected())
-                            } else {
-                                String::new()
-                            };
-                            let resp = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                                body.len()
-                            );
-                            let _ = sock.write_all(resp.as_bytes()).await;
-                            let _ = sock.shutdown().await;
+                            let _permit = permit;
+                            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), serve(sock, storage, connected)).await;
                         });
                     }
                 }
@@ -217,7 +282,9 @@ impl PrometheusHandle {
             // accept 循环退出(被取消或 listener 异常):不再处于监听态
             {
                 let mut g = crate::safe_lock::lock(&slot);
-                g.listening = false;
+                if !token.is_cancelled() {
+                    g.listening = false;
+                }
             }
         });
     }
@@ -266,5 +333,71 @@ mod tests {
         assert!(text.contains("netvision_tests_total 0"));
         assert!(text.contains("netvision_network_connected 0"));
         assert!(!text.contains("netvision_last_download_mbps"));
+    }
+    #[test]
+    fn timestamp_respects_local_offset_and_unknown_values() {
+        let zone = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-11-13T12:00:00+08:00")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            local_timestamp("2026-11-13 12:00:00", &zone),
+            Some(expected)
+        );
+        assert_eq!(
+            local_timestamp("2026-11-13T12:00:00+08:00", &zone),
+            Some(expected)
+        );
+        assert_eq!(local_timestamp("invalid", &zone), None);
+    }
+
+    #[test]
+    fn routes_match_exact_path_and_method() {
+        for (line, status) in [
+            ("GET /metrics HTTP/1.1", 200),
+            ("GET /metrics?x=1 HTTP/1.0", 200),
+            ("GET /metrics-evil HTTP/1.1", 404),
+            ("POST /metrics HTTP/1.1", 405),
+            ("GET /metrics garbage", 400),
+            ("GET", 400),
+        ] {
+            assert_eq!(request_status(line), status);
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_handles_fragmented_http_and_storage_failure() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // Exercise real TCP without touching the application database.
+        for broken in [false, true] {
+            let storage = Arc::new(Storage::open(std::path::Path::new(":memory:")).unwrap());
+            if broken {
+                storage.invalidate_metrics_storage_for_test();
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (sock, _) = listener.accept().await.unwrap();
+                serve(sock, storage, Arc::new(|| true)).await;
+            });
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client.write_all(b"GET /met").await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            client
+                .write_all(b"rics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).await.unwrap();
+            assert!(response.starts_with(if broken {
+                "HTTP/1.1 503"
+            } else {
+                "HTTP/1.1 200"
+            }));
+            if !broken {
+                assert!(response.contains("netvision_history_completed 0"));
+            }
+            server.await.unwrap();
+        }
     }
 }

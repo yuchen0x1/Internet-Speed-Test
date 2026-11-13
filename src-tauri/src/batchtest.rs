@@ -1,6 +1,6 @@
 //! 批量拨测(ITDOG 式):对多个目标并发执行真实 ICMP,逐样本事件上报。
 //!
-//! - 每个目标独立任务,样本间隔 250ms;IcmpSendEcho 免管理员
+//! - 最多 32 个去重目标、8 路并发，样本间隔 250ms;IcmpSendEcho 免管理员
 //! - IPv6 目标由 icmp_ping 自动回退系统 ping
 //! - 域名解析分布:系统解析 + 4 家公共 DNS 交叉统计
 
@@ -11,11 +11,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics;
 
+pub const MAX_TARGETS: usize = 32;
+pub const MAX_CONCURRENCY: usize = 8;
+
 #[derive(Default)]
 struct BatchInner {
-    /// 单调递增代次:区分"本次任务自然结束的清理"与"已被新任务接管"
     gen: u64,
     token: Option<CancellationToken>,
+    snapshot: Option<BatchSnapshot>,
 }
 
 #[derive(Default)]
@@ -42,6 +45,256 @@ pub struct BatchTargetResult {
     pub samples: Vec<Option<f64>>,
 }
 
+/// Snapshot IPC contains all results; update events carry only the changed target.
+/// The revision orders lifecycle changes, while sent orders each target's samples.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchSnapshot {
+    pub run_id: u64,
+    pub started_at: String,
+    pub revision: u64,
+    pub running: bool,
+    pub cancelled: bool,
+    pub count: u32,
+    pub targets: Vec<String>,
+    pub results: Vec<BatchTargetResult>,
+}
+
+pub fn normalize_targets(targets: Vec<String>) -> Result<Vec<String>, String> {
+    let mut valid = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // Bound even duplicate/blank-heavy IPC payloads before processing them.
+    if targets.len() > 256 {
+        return Err("输入行数过多，最多 256 行、32 个不同目标".into());
+    }
+    for target in targets {
+        let target = target.trim().to_ascii_lowercase();
+        if target.is_empty() {
+            continue;
+        }
+        let is_ip = target.parse::<std::net::IpAddr>().is_ok();
+        let is_domain = target.len() <= 253
+            && target.trim_end_matches('.').split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            });
+        if !is_ip && !is_domain {
+            return Err("存在无效目标，请输入主机名或 IP，不要包含协议、路径或端口".into());
+        }
+        // Canonicalize equivalent IP spellings and DNS trailing dots as well.
+        let target = target
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|_| target.trim_end_matches('.').to_string());
+        if seen.insert(target.clone()) {
+            valid.push(target);
+        }
+        if valid.len() > MAX_TARGETS {
+            return Err("最多支持 32 个不同目标".into());
+        }
+    }
+    if valid.is_empty() {
+        return Err("请至少输入一个有效目标".into());
+    }
+    Ok(valid)
+}
+
+fn summarize(target: String, samples: Vec<Option<f64>>) -> BatchTargetResult {
+    let ok: Vec<f64> = samples.iter().filter_map(|v| *v).collect();
+    let sent = samples.len() as u32;
+    let recv = ok.len() as u32;
+    BatchTargetResult {
+        target,
+        sent,
+        recv,
+        loss_percent: if sent == 0 {
+            0.0
+        } else {
+            (sent - recv) as f64 * 100.0 / sent as f64
+        },
+        min_ms: ok.iter().copied().reduce(f64::min),
+        max_ms: ok.iter().copied().reduce(f64::max),
+        avg_ms: if ok.is_empty() {
+            None
+        } else {
+            Some(ok.iter().sum::<f64>() / ok.len() as f64)
+        },
+        latest_ms: samples.last().copied().flatten(),
+        samples,
+    }
+}
+
+impl BatchInner {
+    fn begin(
+        &mut self,
+        targets: Vec<String>,
+        count: u32,
+    ) -> Result<(CancellationToken, u64), String> {
+        if self.token.is_some() {
+            return Err("上一轮拨测尚未结束，请等待或停止后重试".into());
+        }
+        self.gen += 1;
+        let token = CancellationToken::new();
+        self.token = Some(token.clone());
+        self.snapshot = Some(BatchSnapshot {
+            run_id: self.gen,
+            started_at: chrono::Local::now().to_rfc3339(),
+            revision: 0,
+            running: true,
+            cancelled: false,
+            count: count.clamp(1, 100),
+            targets,
+            results: Vec::new(),
+        });
+        Ok((token, self.gen))
+    }
+
+    fn sample(&mut self, run_id: u64, result: BatchTargetResult) -> Option<BatchSnapshot> {
+        let s = self.snapshot.as_mut()?;
+        if s.run_id != run_id || !s.running || s.cancelled {
+            return None;
+        }
+        s.results.retain(|r| r.target != result.target);
+        s.results.push(result.clone());
+        s.revision += 1;
+        Some(BatchSnapshot {
+            results: vec![result],
+            ..s.clone()
+        })
+    }
+
+    fn finish(&mut self, run_id: u64) -> Option<BatchSnapshot> {
+        let s = self.snapshot.as_mut()?;
+        if s.run_id != run_id || !s.running {
+            return None;
+        }
+        s.running = false;
+        s.revision += 1;
+        self.token = None;
+        Some(s.clone())
+    }
+}
+
+/// Bound native probes, DNS timeouts, and cancellation, including queued targets.
+async fn run_probes<F, Fut, S>(
+    targets: Vec<String>,
+    count: u32,
+    token: CancellationToken,
+    probe: F,
+    sample: S,
+) where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Option<f64>>,
+    S: Fn(String, Vec<Option<f64>>),
+{
+    use futures_util::StreamExt;
+    futures_util::stream::iter(targets).for_each_concurrent(MAX_CONCURRENCY, |target| {
+        let token = &token;
+        let probe = &probe;
+        let sample = &sample;
+        async move {
+            let mut samples = Vec::new();
+            for i in 0..count {
+                let rtt = tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return,
+                    rtt = tokio::time::timeout(std::time::Duration::from_secs(5), probe(target.clone())) => rtt.unwrap_or(None),
+                };
+                if token.is_cancelled() { return; }
+                samples.push(rtt);
+                sample(target.clone(), samples.clone());
+                if i + 1 < count {
+                    tokio::select! {
+                        _ = token.cancelled() => return,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+                    }
+                }
+            }
+        }
+    }).await;
+}
+
+impl BatchTestState {
+    pub fn start(
+        &self,
+        app: tauri::AppHandle,
+        targets: Vec<String>,
+        count: u32,
+    ) -> Result<usize, String> {
+        use tauri::Emitter as _;
+        let targets = normalize_targets(targets)?;
+        let count = count.clamp(1, 100);
+        let n = targets.len();
+        let (token, run_id) = crate::safe_lock::lock(&self.inner).begin(targets.clone(), count)?;
+        let slot = self.inner.clone();
+        tauri::async_runtime::spawn(async move {
+            run_probes(
+                targets,
+                count,
+                token,
+                |target| async move {
+                    diagnostics::icmp_ping(&target, 1, 1200)
+                        .await
+                        .rtts_ms
+                        .first()
+                        .copied()
+                },
+                |target, samples| {
+                    let result = summarize(target.clone(), samples);
+                    // Publish under the state lock: finish/start cannot overtake a sample.
+                    let mut inner = crate::safe_lock::lock(&slot);
+                    if let Some(update) = inner.sample(run_id, result.clone()) {
+                        let _ = app.emit("batchtest://update", &update);
+                        // Preserve the legacy event and command contracts.
+                        let _ = app.emit(
+                            "batchtest://tick",
+                            &BatchTick {
+                                target,
+                                rtt_ms: result.latest_ms,
+                            },
+                        );
+                        if result.sent == count {
+                            let _ = app.emit("batchtest://target_done", &result);
+                        }
+                    }
+                },
+            )
+            .await;
+            let mut inner = crate::safe_lock::lock(&slot);
+            if let Some(snapshot) = inner.finish(run_id) {
+                let _ = app.emit("batchtest://update", &snapshot);
+                let _ = app.emit("batchtest://all_done", &snapshot.results.len());
+            }
+        });
+        Ok(n)
+    }
+
+    pub fn stop(&self) {
+        let mut inner = crate::safe_lock::lock(&self.inner);
+        if let Some(t) = &inner.token {
+            t.cancel();
+        }
+        if let Some(s) = &mut inner.snapshot {
+            if s.running {
+                s.cancelled = true;
+                s.revision += 1;
+            }
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        crate::safe_lock::lock(&self.inner).token.is_some()
+    }
+
+    pub fn snapshot(&self) -> Option<BatchSnapshot> {
+        crate::safe_lock::lock(&self.inner).snapshot.clone()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DnsDistEntry {
     pub server: String,
@@ -58,122 +311,6 @@ pub struct DnsDistributionReport {
     /// IP -> 被多少家解析器返回
     pub distribution: Vec<(String, u32)>,
     pub resolvers: u32,
-}
-
-impl BatchTestState {
-    pub fn start(
-        &self,
-        app: tauri::AppHandle,
-        targets: Vec<String>,
-        count: u32,
-    ) -> Result<usize, String> {
-        use tauri::Emitter as _;
-        let count = count.clamp(1, 100);
-        let valid: Vec<String> = targets
-            .into_iter()
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty() && diagnostics::valid_host(t))
-            .collect();
-        if valid.is_empty() {
-            // 先校验输入再停旧任务:非法输入不应中断正在运行的拨测
-            return Err("没有有效的目标主机".into());
-        }
-        let (token, my_gen) = {
-            let mut inner = crate::safe_lock::lock(&self.inner);
-            if let Some(t) = inner.token.take() {
-                t.cancel();
-            }
-            inner.gen += 1;
-            let token = CancellationToken::new();
-            inner.token = Some(token.clone());
-            (token, inner.gen)
-        };
-        let n = valid.len();
-        let slot = self.inner.clone();
-        tauri::async_runtime::spawn(async move {
-            let mut set = tokio::task::JoinSet::new();
-            for target in valid {
-                let app = app.clone();
-                let token = token.clone();
-                set.spawn(async move {
-                    let mut samples: Vec<Option<f64>> = Vec::with_capacity(count as usize);
-                    for i in 0..count {
-                        if token.is_cancelled() {
-                            break;
-                        }
-                        let p = diagnostics::icmp_ping(&target, 1, 1200).await;
-                        let rtt = p.rtts_ms.first().copied();
-                        samples.push(rtt);
-                        let _ = app.emit(
-                            "batchtest://tick",
-                            &BatchTick {
-                                target: target.clone(),
-                                rtt_ms: rtt,
-                            },
-                        );
-                        if i + 1 < count {
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                        }
-                    }
-                    let recv = samples.iter().filter(|s| s.is_some()).count();
-                    let ok: Vec<f64> = samples.iter().filter_map(|s| *s).collect();
-                    BatchTargetResult {
-                        target,
-                        sent: samples.len() as u32,
-                        recv: recv as u32,
-                        loss_percent: if samples.is_empty() {
-                            0.0
-                        } else {
-                            (samples.len() - recv) as f64 * 100.0 / samples.len() as f64
-                        },
-                        min_ms: ok.iter().cloned().fold(None, |a: Option<f64>, v| {
-                            Some(a.map_or(v, |m: f64| m.min(v)))
-                        }),
-                        max_ms: ok.iter().cloned().fold(None, |a: Option<f64>, v| {
-                            Some(a.map_or(v, |m: f64| m.max(v)))
-                        }),
-                        avg_ms: if ok.is_empty() {
-                            None
-                        } else {
-                            Some(ok.iter().sum::<f64>() / ok.len() as f64)
-                        },
-                        latest_ms: *samples.last().unwrap_or(&None),
-                        samples,
-                    }
-                });
-            }
-            let mut results = Vec::new();
-            while let Some(res) = set.join_next().await {
-                if let Ok(r) = res {
-                    let _ = app.emit("batchtest://target_done", &r);
-                    results.push(r);
-                }
-            }
-            // 自然结束后复位运行状态;若已被新任务接管(代次变化)则不动新任务的 token
-            {
-                let mut inner = crate::safe_lock::lock(&slot);
-                if inner.gen == my_gen {
-                    inner.token = None;
-                }
-            }
-            let _ = app.emit("batchtest://all_done", &results.len());
-        });
-        Ok(n)
-    }
-
-    pub fn stop(&self) {
-        let token = {
-            let mut inner = crate::safe_lock::lock(&self.inner);
-            inner.token.take()
-        };
-        if let Some(t) = token {
-            t.cancel();
-        }
-    }
-
-    pub fn is_running(&self) -> bool {
-        crate::safe_lock::lock(&self.inner).token.is_some()
-    }
 }
 
 /// 域名解析分布:系统解析 + 公共 DNS 交叉,统计每个 IP 被多少家返回
@@ -232,4 +369,129 @@ pub async fn dns_distribution(domain: &str) -> Result<DnsDistributionReport, Str
         distribution: dist.into_iter().collect(),
         resolvers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_validation_is_atomic_deduplicated_and_bounded() {
+        let input = [
+            " Example.COM. ",
+            "example.com",
+            "::1",
+            "0:0:0:0:0:0:0:1",
+            "127.0.0.1",
+        ];
+        assert_eq!(
+            normalize_targets(input.map(str::to_string).to_vec()).unwrap(),
+            ["example.com", "::1", "127.0.0.1"]
+        );
+        for bad in [
+            "https://example.com",
+            "host:443",
+            "-bad",
+            "a..b",
+            "bad/host",
+            "",
+            " ",
+        ] {
+            assert!(normalize_targets(vec![bad.into()]).is_err(), "{bad}");
+        }
+        assert!(normalize_targets((0..33).map(|i| format!("host{i}.test")).collect()).is_err());
+        assert!(normalize_targets(vec!["x".into(); 257]).is_err());
+    }
+
+    #[test]
+    fn lifecycle_rejects_overlap_and_stale_events() {
+        let mut inner = BatchInner::default();
+        let (_, first) = inner.begin(vec!["localhost".into()], 10).unwrap();
+        assert!(inner.begin(vec!["localhost".into()], 10).is_err());
+        inner.sample(first, summarize("localhost".into(), vec![Some(5.0), None]));
+        inner.snapshot.as_mut().unwrap().cancelled = true;
+        assert!(inner
+            .sample(first, summarize("localhost".into(), vec![Some(99.0)]))
+            .is_none());
+        let final_state = inner.finish(first).unwrap();
+        assert!(final_state.cancelled);
+        assert_eq!(final_state.results[0].sent, 2);
+        assert_eq!(final_state.results[0].loss_percent, 50.0);
+        let (_, next) = inner.begin(vec!["localhost".into()], 10).unwrap();
+        assert!(inner.finish(first).is_none());
+        assert!(inner
+            .sample(first, summarize("localhost".into(), vec![None]))
+            .is_none());
+        assert_eq!(inner.snapshot.unwrap().run_id, next);
+    }
+
+    #[tokio::test]
+    async fn probes_limit_concurrency_and_preserve_timeouts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let received = Mutex::new(Vec::new());
+        run_probes(
+            (0..32).map(|i| i.to_string()).collect(),
+            1,
+            CancellationToken::new(),
+            |_| async {
+                let n = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(n, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                active.fetch_sub(1, Ordering::SeqCst);
+                None
+            },
+            |_, samples| received.lock().unwrap().push(samples),
+        )
+        .await;
+        assert_eq!(peak.load(Ordering::SeqCst), MAX_CONCURRENCY);
+        assert_eq!(received.lock().unwrap().len(), 32);
+        assert!(received.lock().unwrap().iter().all(|v| v == &[None]));
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_inflight_and_queued_probes() {
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        let stop = async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            cancel.cancel();
+        };
+        let run = run_probes(
+            vec!["localhost".into(); 32],
+            100,
+            token,
+            |_| std::future::pending::<Option<f64>>(),
+            |_, _| panic!("cancelled probe emitted a sample"),
+        );
+        tokio::time::timeout(std::time::Duration::from_millis(300), async {
+            tokio::join!(run, stop);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "real Windows loopback ICMP"]
+    async fn loopback_uses_real_icmp_pipeline() {
+        let samples = Mutex::new(Vec::new());
+        run_probes(
+            vec!["127.0.0.1".into()],
+            2,
+            CancellationToken::new(),
+            |host| async move {
+                diagnostics::icmp_ping(&host, 1, 1200)
+                    .await
+                    .rtts_ms
+                    .first()
+                    .copied()
+            },
+            |_, values| *samples.lock().unwrap() = values,
+        )
+        .await;
+        let values = samples.lock().unwrap();
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(Option::is_some));
+    }
 }

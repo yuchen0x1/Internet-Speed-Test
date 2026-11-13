@@ -22,15 +22,15 @@ v1.12.0 起启用 `requireSignedVersion`：签名中的受保护版本必须与�
 
 ## 发布流程
 
-正式发布使用语义化版本标签，例如 `v1.12.0`：
+正式发布使用语义化版本标签，例如 `v1.13.0`：
 
 ```powershell
 git checkout main
 git pull --ff-only
-# 同步修改 package.json、src-tauri/tauri.conf.json、src-tauri/Cargo.toml 版本号
-git tag -a v1.12.0 -m "NetVision Pro v1.12.0"
+# 同步修改 package.json、package-lock.json、Tauri/Cargo 配置及 Cargo.lock 的项目版本
+git tag -a v1.13.0 -m "NetVision Pro v1.13.0"
 git push origin main
-git push origin v1.12.0
+git push origin v1.13.0
 ```
 
 推送 `v*` 标签后，`.github/workflows/release.yml` 会在 Windows runner 上：

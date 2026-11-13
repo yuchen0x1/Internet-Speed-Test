@@ -11,7 +11,7 @@ export default defineConfig({
     host: "127.0.0.1",
     watch: {
       // Rust 构建产物不参与前端热更新,避免 EBUSY
-      ignored: ["**/src-tauri/**", "**/dist/**"],
+      ignored: ["**/src-tauri/**", "**/dist/**", "**/.evolution/**", "**/.autonomous-upgrade/**"],
     },
   },
   build: {

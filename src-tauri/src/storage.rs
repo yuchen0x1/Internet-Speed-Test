@@ -31,6 +31,36 @@ pub struct HistoryRow {
     pub status: String,
 }
 
+fn history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRow> {
+    Ok(HistoryRow {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        download_mbps: row.get(2)?,
+        upload_mbps: row.get(3)?,
+        idle_ping_ms: row.get(4)?,
+        jitter_ms: row.get(5)?,
+        loaded_down_ms: row.get(6)?,
+        loaded_up_ms: row.get(7)?,
+        packet_loss_percent: row.get(8)?,
+        server_name: row.get(9)?,
+        server_provider: row.get(10)?,
+        server_url: row.get(11)?,
+        network_type: row.get(12)?,
+        interface_name: row.get(13)?,
+        public_ip: row.get(14)?,
+        isp: row.get(15)?,
+        status: row.get(16)?,
+    })
+}
+
+pub struct HistoryMetrics {
+    pub latest: Option<HistoryRow>,
+    pub total: u32,
+    pub completed: u32,
+    pub failed: u32,
+    pub cancelled: u32,
+}
+
 /// SQL 聚合整个筛选范围，不受列表分页或导出上限影响。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HistorySummary {
@@ -329,27 +359,7 @@ impl Storage {
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(HistoryRow {
-                    id: row.get(0)?,
-                    created_at: row.get(1)?,
-                    download_mbps: row.get(2)?,
-                    upload_mbps: row.get(3)?,
-                    idle_ping_ms: row.get(4)?,
-                    jitter_ms: row.get(5)?,
-                    loaded_down_ms: row.get(6)?,
-                    loaded_up_ms: row.get(7)?,
-                    packet_loss_percent: row.get(8)?,
-                    server_name: row.get(9)?,
-                    server_provider: row.get(10)?,
-                    server_url: row.get(11)?,
-                    network_type: row.get(12)?,
-                    interface_name: row.get(13)?,
-                    public_ip: row.get(14)?,
-                    isp: row.get(15)?,
-                    status: row.get(16)?,
-                })
-            })
+            .query_map(refs.as_slice(), history_row)
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -397,10 +407,47 @@ impl Storage {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn history_count(&self) -> Result<u32, String> {
         crate::safe_lock::lock(&self.conn)
             .query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))
             .map_err(|e| e.to_string())
+    }
+
+    /// One connection lock keeps counts and the latest successful result consistent.
+    #[cfg(test)]
+    pub(crate) fn invalidate_metrics_storage_for_test(&self) {
+        crate::safe_lock::lock(&self.conn)
+            .execute("DROP TABLE history", [])
+            .unwrap();
+    }
+
+    pub fn metrics_snapshot(&self) -> Result<HistoryMetrics, String> {
+        use rusqlite::OptionalExtension;
+        let conn = crate::safe_lock::lock(&self.conn);
+        let (total, completed, failed, cancelled) = conn.query_row(
+            "SELECT COUNT(*), COUNT(CASE WHEN status='completed' THEN 1 END),
+                COUNT(CASE WHEN status='failed' THEN 1 END), COUNT(CASE WHEN status='cancelled' THEN 1 END) FROM history",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).map_err(|e| e.to_string())?;
+        let latest = conn
+            .query_row(
+                "SELECT id, created_at, download_mbps, upload_mbps, idle_ping_ms, jitter_ms,
+                loaded_down_ms, loaded_up_ms, packet_loss_percent, server_name,
+                server_provider, server_url, network_type, interface_name, public_ip, isp, status
+             FROM history WHERE status='completed' ORDER BY id DESC LIMIT 1",
+                [],
+                history_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(HistoryMetrics {
+            latest,
+            total,
+            completed,
+            failed,
+            cancelled,
+        })
     }
 
     /// 满足筛选条件的历史条数(与 `list_history` 同一 WHERE 口径)。
@@ -925,5 +972,26 @@ mod tests {
             .unwrap()
             .avg_upload_mbps
             .is_none());
+    }
+    #[test]
+    fn metrics_selects_latest_success_and_counts_all_statuses() {
+        let s = mem_storage();
+        assert!(s.metrics_snapshot().unwrap().latest.is_none());
+        s.insert_result(&sample_result("completed")).unwrap();
+        s.insert_result(&sample_result("failed")).unwrap();
+        s.insert_result(&sample_result("cancelled")).unwrap();
+        let metrics = s.metrics_snapshot().unwrap();
+        assert_eq!(
+            (
+                metrics.total,
+                metrics.completed,
+                metrics.failed,
+                metrics.cancelled
+            ),
+            (3, 1, 1, 1)
+        );
+        assert_eq!(metrics.latest.unwrap().status, "completed");
+        s.clear_history().unwrap();
+        assert_eq!(s.metrics_snapshot().unwrap().total, 0);
     }
 }

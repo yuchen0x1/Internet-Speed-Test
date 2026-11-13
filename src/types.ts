@@ -343,6 +343,17 @@ export interface BatchTargetResult {
   samples: (number | null)[];
 }
 
+export interface BatchSnapshot {
+  run_id: number;
+  started_at: string;
+  revision: number;
+  running: boolean;
+  cancelled: boolean;
+  count: number;
+  targets: string[];
+  results: BatchTargetResult[];
+}
+
 export interface DnsDistEntry {
   server: string;
   source: string;
