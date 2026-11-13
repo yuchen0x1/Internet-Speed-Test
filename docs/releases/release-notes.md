@@ -1,73 +1,336 @@
-# 发布说明
+# 版本更新日志
+
+以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
+
+`v1.8.0`～`v1.12.0` 为已有 GitHub Releases；`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。一般使用请下载 [最新稳定版](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest)。
+
+本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。修订前的开发/验证记录保存在 [原日志归档](legacy-changelog.md)，不将历史记录中的测试结论当作本轮重测。
+
+| 版本 | 日期与状态 | 主要变化 |
+| --- | --- | --- |
+| [v1.12.0](#v1-12-0) | 2026-11-13 · 公开发布 | 历史与状态可信度、设置/节点/监控修复、自动检查更新 |
+| [v1.11.0](#v1-11-0) | 2026-11-10 · 公开发布 | 首次应用内更新与签名更新通道 |
+| [v1.10.0](#v1-10-0) | 2026-11-10 · 公开发布 | 分页历史、诊断记录、键盘操作与稳定性 |
+| [v1.9.0](#v1-9-0) | 2026-11-09 · 公开发布 | sharp 依赖维护与用户文档整理 |
+| [v1.8.0](#v1-8-0) | 2026-11-09 · 公开发布 | 首个公开版、M-Lab NDT7 与隐私边界 |
+| [v1.7.0](#v1-7-0) | 2026-11-07 · 开发记录 | 官方测速入口、过程可视化与手动节点修复 |
+| [v1.6.0](#v1-6-0) | 2026-11-07 · 开发记录 | 多目标批量拨测与 DNS 分布 |
+| [v1.5.0](#v1-5-0) | 2026-11-07 · 开发记录 | 历史统计、告警、保留策略与指标端点 |
+| [v1.4.0](#v1-4-0) | 2026-11-07 · 开发记录 | 连续 Ping、连通性矩阵与多种可视化 |
+| [v1.3.0](#v1-3-0) | 2026-11-07 · 开发记录 | 测速动效与主题体验 |
+| [v1.2.0](#v1-2-0) | 2026-11-07 · 开发记录 | 计划测速、托盘、DNS/NAT/路由诊断 |
+| [v1.1.0](#v1-1-0) | 2026-11-07 · 开发记录 | 系统 ICMP、CLI 与历史详情回放 |
+| [v1.0.0](#v1-0-0) | 2026-11-07 · 开发记录 | 桌面测速、基础诊断、本地历史与监控 |
+
+<a id="v1-12-0"></a>
 
 ## v1.12.0 (2026-11-13)
 
-- 测速历史新增今天、近 7 天和近 30 天筛选，结束日期包含全天；CSV/JSON 使用当前日期与排序。
-- 统计卡汇总整个筛选范围，区分成功、失败和取消，未测上传不再按 0 参与均值。
-- 修复完成事件早于结果保存、取消/失败显示完成、过期状态查询和事件连接无法重试的问题。
-- 修复节点新增后丢失、删除后恢复、授权 HTTP 节点无法使用等问题；删除当前手动节点会回到自动优选。
-- 改善设置失败一致性、监控暂停和 Ping 目标恢复；较旧历史回填不覆盖实时点。
-- 取消测速不生成完整质量评级，未知丢包与上传在雷达图上保持未知；配置反复损坏时保留既有备份。
-- 启动时按配置检查稳定版更新，显示发布说明与下载字节进度；更新签名绑定版本，拒绝不匹配的更新内容。
+本版重点：让历史统计、测速状态与设置保存更加可信，并完善自动更新体验。
 
-[发布验证](verification-v1.12.0.md) · [产物暴露面复核](exposure-v1.12.0.md)
+### 新增
 
-已知限制：200ms 监控采样下，3600 点缓冲约覆盖 12 分钟；日均、趋势和热力图仍基于已加载记录。安装器未配置 Windows Authenticode 证书，更新包另有 minisign 签名。旧客户端实际更新安装及重启仍需单独验收。
+- 历史页增加“今天”“近 7 天”“近 30 天”快捷范围、刷新记录、读取失败重试及导出中状态。
+- 统计卡汇总整个筛选范围，分别显示完成、失败和取消数量；不再受当前加载页数限制。
+- 启动后按配置间隔检查稳定版更新，发现新版本时提示前往设置页；支持查看发布时间、发布说明、下载字节数和总大小。
+
+### 改进
+
+- 日期筛选包含结束日期全天；CSV/JSON 导出沿用当前日期和排序，超过 5000 条时明确提示截断。
+- 上传均值跳过未知结果，真实 0 值仍参与计算；日均、趋势和热力图明确标注“已加载记录”。
+- 历史趋势按实际测试时间从左向右绘制，不再随列表排序方向反转。
+- 测速完成、失败和取消均回传完整结果，等待历史写入结束后再通知界面刷新；保存失败与测量失败分别提示。
+- 设置保存与节点增删按顺序处理，成功后同步实际保存状态；普通设置保存不再无条件操作系统自启动。
+- 更新包签名绑定版本号，客户端拒绝签名版本与清单版本不匹配的内容；发布时核对版本文件与标签。
+
+### 修复
+
+- 修复结束日期当天记录缺失、刚完成的结果未及时出现在历史页的问题。
+- 修复失败/取消显示为 100% 完成、跨阶段计时重置、采样缓存满后时间轴停滞的问题。
+- 修复取消测试被评为“优秀”、未知丢包和未测上传在雷达图上显示为实测分数的问题；旧取消记录导出的 HTML 也不再显示完整评级。
+- 修复旧设置快照抹掉新节点、恢复已删节点，以及授权 HTTP 节点无法手动使用的问题；删除当前手动节点后回到自动优选。
+- 修复事件订阅失败无法重试、重复绑定、迟到的运行状态查询覆盖新结束事件的问题。
+- 修复暂停失败仍显示已暂停、监控页返回后显示错误 Ping 目标、停止后的旧探测继续发样本，以及历史回填覆盖实时点的问题。
+- 修复系统自启动操作失败与配置保存结果不一致的问题；配置反复损坏时保留已有 `.bak`，后续使用 `.bak.1` 等恢复点。
+
+### 升级与限制
+
+- v1.11.0 用户可在“设置与关于 → 关于 → 检查更新”发现本版；更早版本需手动下载安装包。
+- 200ms 高频监控下，3600 点缓冲约覆盖 12 分钟；默认 1 秒采样才接近 1 小时。全范围统计与已加载图表的口径不同。
+- 线上安装包、更新清单、签名和 SHA-256 已核对；隔离 v1.11.0 客户端已验证可发现本版。实际更新安装及重启未作为已完成的端到端验收。
+- 安装器未配置 Windows Authenticode 证书；minisign 用于更新包验证，不等同于 Windows 代码签名。
+
+### 下载与校验
+
+- 系统：Windows 10/11 x64，依赖 WebView2；NSIS 按当前用户安装。
+- 安装包：[NetVision.Pro_1.12.0_x64-setup.exe](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.12.0/NetVision.Pro_1.12.0_x64-setup.exe)。
+- SHA-256：`6315053ba3e1e8a16e5b4c99e46c30d2e7a8717f12d26191cfe74e9fc2eb00c7`。
+- 本页同时提供 `latest.json`、`.exe.sig` 与 `SHA256SUMS.txt`，用于更新发现与校验。
+
+[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.12.0) · [完整版本历史](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/release-notes.md)
+
+[本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.11.0...v1.12.0)
+
+[发布验证](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/verification-v1.12.0.md) · [产物暴露面复核](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/exposure-v1.12.0.md)
+
+<a id="v1-11-0"></a>
 
 ## v1.11.0 (2026-11-10)
 
-### Added
+本版重点：首次提供应用内更新和签名更新通道。
 
-- 应用内自动更新：设置页「检查更新」，通过 GitHub Release 的 `latest.json` 检查新版本，minisign 签名校验后显示下载进度并以 passive 模式安装、自动重启。
-- Release 自动化工作流：推送 `v*` 标签自动完成签名构建，生成 `latest.json` 与 `SHA256SUMS.txt` 并发布 GitHub Release。
+### 新增
 
-### Changed
+- 在“设置与关于 → 关于”提供“检查更新”，发现新版本后可下载并启动安装。
+- 下载过程显示进度；安装由 Windows NSIS passive 模式接管，完成后进入应用重启流程。
+- 发布更新清单 `latest.json`、安装包 `.sig` 签名和 `SHA256SUMS.txt`，客户端使用内置公钥验证更新包。
+- 推送版本标签后可自动构建、签名并生成 GitHub Release 资产。
 
-- 构建启用 `createUpdaterArtifacts`；更新器端点指向本仓库 Releases。
+### 升级与限制
+
+- v1.10.0 及更早版本没有应用内更新入口，升级到本版需要手动下载安装包；之后可使用设置页检查更新。
+- 本版主要由用户主动检查更新；启动后按间隔检查、发布说明与完整字节进度在 v1.12.0 进一步完善。
+- 更新器签名不等同于 Windows Authenticode 证书。此处描述的是已实现的更新流程，不将完整安装与重启视为已验收。
+
+### 下载与校验
+
+- 系统：Windows 10/11 x64，依赖 WebView2；NSIS 按当前用户安装。
+- 安装包：[NetVision.Pro_1.11.0_x64-setup.exe](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.11.0/NetVision.Pro_1.11.0_x64-setup.exe)。
+- SHA-256：`7b0945260b95eb6694138f4db59fc9da6ede5df3ff66dca0eeab2617538b8143`。
+- 本页同时提供 `latest.json`、`.exe.sig` 与 `SHA256SUMS.txt`，用于更新发现与校验。
+
+[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.11.0) · [完整版本历史](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/release-notes.md)
+
+[本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.10.0...v1.11.0)
+
+<a id="v1-10-0"></a>
 
 ## v1.10.0 (2026-11-10)
 
-### Added
+本版重点：完善大数据量历史浏览、诊断记录和桌面操作可靠性。
 
-- 增加测速历史 keyset 游标分页与“加载更多”，支持按日期筛选、升降序稳定翻页。
-- 增加诊断历史按类型筛选。
-- 增加 React 页面错误边界、Modal ARIA/键盘焦点管理与 Sidebar Ctrl+1..8 快捷导航。
-- 增加监控暂停状态恢复，并在关于页面显示设置文件路径。
-- 增加 CI 中 Rust fmt/严格 Clippy、前端/Rust 测试、npm/cargo audit 门禁。
+### 新增
 
-### Changed
+- 测速历史增加游标分页和“加载更多”，可继续浏览较大的历史库，降低并发新增/删除对分页位置的影响。
+- 诊断结果可按隐私设置保存在本地，支持按诊断类型筛选和查看详情。
+- 增加 Ctrl+1～8 页面快捷导航、可见键盘焦点，以及弹窗初始焦点、Tab 焦点约束、Esc 关闭和焦点归还。
+- 页面错误边界与全局错误提示，避免单页异常导致整个界面失去响应。
+- 关于页显示实际设置文件路径，便于用户备份和排查问题。
 
-- 历史计数与 500 条窗口提示明确区分已加载行与筛选总数。
-- CSV 文本字段执行 RFC4180 转义及公式注入中和(包含 `= + - @`、控制字符和前导空白场景)。
-- 监控刷新间隔、采样窗口、Prometheus 实际监听状态和诊断历史记录持久化与设置行为一致。
-- NDT7 节点发现缓存引入 TTL/失效路径；测速状态在应用启动和重新聚焦时重新对账。
-- CI 固定 Rust 1.99.1 / Node 22.22.2；npm lockfile 下载 URL 指向官方 npm registry，版本和 integrity 未变。
-- 7 个非首屏页面按需加载；增加全局 focus-visible 和 reduced-motion 兼容样式。
-- 清理 Rust 格式与 Clippy 警告；`EngineEvent::Finished` 的 Rust 字段使用 `Box<TestResult>`，Serde JSON 外部结构不变。
+### 改进与修复
 
-### Fixed
+- 明确区分“已加载条数”和“筛选总数”，清空确认使用全库计数；本版统计卡仍基于已加载窗口，全范围统计在 v1.12.0 补齐。
+- CSV 对文本字段执行转义并处理公式前缀，降低表格软件将外部节点名、ISP 等文本当成公式的风险。
+- 监控页重新打开时恢复后端暂停状态；刷新频率设置开始作用于实际采样。
+- Prometheus 页面显示真实监听状态和绑定失败原因，停止把开关意图当作监听成功。
+- 设置采用临时文件与重命名写回，配置损坏时保留备份；后续 v1.12.0 完善了多次备份和自启动补偿。
+- NDT7 发现缓存加入有效期，测速失败后重新发现节点；启动与窗口聚焦时对账后端运行状态。
+- 非首屏页面按需加载，减少首屏加载量；加强锁异常处理及自动化质量检查。
 
-- 修复公式注入 CSV 单元格的中和边界及测试断言。
-- 修复历史大数据集无法继续浏览的问题，并用 ID 游标避免 offset 在并发插入/删除后漂移。
-- 修复监控页面重挂时暂停状态与后端状态不一致。
+### 升级与限制
 
-### Verification
+- 本版尚无应用内更新，升级需手动下载目标版本安装包。
+- ICMP、NAT、路由和节点发现仍受网络策略与远端服务可用性影响，超时或未知不能等同于本机断网。
 
-- Rust tests：59 passed，3 ignored(真实网络用例)。
-- Frontend tests：37 passed；TypeScript typecheck、Vite production build 通过。
-- `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 通过。
-- `npm audit`(官方 registry)：0 vulnerabilities。
-- 未运行 GUI、真实网络验收、远端 GitHub Actions 或 `cargo audit`；详情见 `TEST_REPORT.md`。
+### 下载与校验
 
-## v1.9.0
+- 系统：Windows 10/11 x64，依赖 WebView2；NSIS 按当前用户安装。
+- 安装包：[NetVision.Pro_1.10.0_x64-setup.exe](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.10.0/NetVision.Pro_1.10.0_x64-setup.exe)。
+- SHA-256：`1140c9e5aa0b7fdb1306c4c7c44e29c53c070b000e7eed567bd66522f701b673`。
+- 本版未发布应用内更新所需的清单与签名资产，升级应手动下载目标版本安装包。
 
-- 提高历史数据与导出的可信度：准确计数、CSV 公式注入防护、诊断历史持久化及按类型筛选。
-- 改善监控、Prometheus、测速状态恢复和设置文件写入的可靠性。
-- 增加错误边界、可访问性、键盘快捷导航、历史游标分页和按需页面加载。
-- 加强 Rust 格式/lint 门禁与 CI 依赖审计配置。
+[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.10.0) · [完整版本历史](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/release-notes.md)
 
-## v1.8.0
+[本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.9.0...v1.10.0)
 
-- 接入 M-Lab NDT7：通过 Locate API v2 动态发现节点，支持 WSS/WS 和真实 WebSocket 下载、上传。
-- 完善 NDT7 令牌与端点边界：敏感信息不进入 IPC、事件、CLI JSON 或历史存储。
-- 优化节点选择、测速过程展示和质量分析，并保留 LibreSpeed、Cloudflare Speed 与自定义节点能力。
+<a id="v1-9-0"></a>
+
+## v1.9.0 (2026-11-09)
+
+本版重点：依赖安全维护、安装说明与用户文档整理。
+
+### 改进
+
+- 图标构建依赖 sharp 从 0.34.x 更新到 0.35.5，并同步锁文件，处理当时依赖审计发现的问题。
+- 完善 README、使用指南、配置说明、故障排查和贡献指南，补充下载、当前用户安装、WebView2 与 CLI 操作说明。
+- 修正安装包名称和截图来源声明，将旧版界面示例与本版运行验证记录分开说明。
+- 增加版本验证文档和已有脱敏界面素材，便于查阅各页面用途。
+
+### 版本边界
+
+- 相对 v1.8.0 标签，本版没有修改 `src/` 或 `src-tauri/src/` 中的业务代码，没有新增测速协议或更换测量公式。
+- 历史分页、诊断历史持久化、快捷键和页面错误边界属于后续 v1.10.0，旧日志中的归属已在本次整理中纠正。
+- 本版没有应用内更新，升级到后续版本需手动下载对应安装包。
+
+### 下载与校验
+
+- 系统：Windows 10/11 x64，依赖 WebView2；NSIS 按当前用户安装。
+- 安装包：[NetVision.Pro_1.9.0_x64-setup.exe](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.9.0/NetVision.Pro_1.9.0_x64-setup.exe)。
+- SHA-256：`71728526706222fde5c70168c2d18ab5bf3149a666352ad17f003391d13511e0`。
+- 本版未发布应用内更新所需的清单与签名资产，升级应手动下载目标版本安装包。
+
+[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.9.0) · [完整版本历史](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/release-notes.md)
+
+[本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.8.0...v1.9.0)
+
+<a id="v1-8-0"></a>
+
+## v1.8.0 (2026-11-09)
+
+本版重点：首个公开发布版本，加入 M-Lab NDT7，并汇集此前的桌面测速与诊断能力。
+
+### 新增与整合
+
+- 接入 M-Lab NDT7：通过 Locate API v2 发现候选节点，进行连接探测，使用真实 WebSocket 二进制数据测量下载和上传。
+- 节点页区分 LibreSpeed、Cloudflare 和 M-Lab NDT7 提供商；优先 WSS，明文 WS 路径给出提示。
+- NDT7 临时访问令牌仅留在运行时节点中，不进入 IPC、前端事件、CLI JSON 或新历史记录；处理旧详情中的敏感端点。
+- 汇集早期开发版本的能力：多流测速与质量分析、网络诊断、批量拨测、本地历史、网卡监控、计划测速、托盘、CLI 和本机指标端点。
+- 完善诊断错误提示、导出截断说明、DNS 输入校验、渲染与存储调用，整理首次公开版文档和许可说明。
+
+### 使用与限制
+
+- NDT7 延迟为 WebSocket 握手时延近似，不能直接等同于 ICMP 或 HTTP Ping；该协议不提供公网 IP/ISP 查询。
+- 官方测速站卡片交给系统浏览器打开，不抓取网页或将第三方站点结果写入本地历史。
+- 本版没有应用内更新；节点与线路可用性会影响结果，建议需要时配置可访问的 LibreSpeed 节点。
+
+### 下载与校验
+
+- 系统：Windows 10/11 x64，依赖 WebView2；NSIS 按当前用户安装。
+- 安装包：[NetVision.Pro_1.8.0_x64-setup.exe](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.8.0/NetVision.Pro_1.8.0_x64-setup.exe)。
+- SHA-256：`79a2ed7bb4a64a8c7bc3161228e93689855470ccd9ff1ac381c3579736fad59b`。
+- 本版未发布应用内更新所需的清单与签名资产，升级应手动下载目标版本安装包。
+
+[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.8.0) · [完整版本历史](https://github.com/yuchen0x1/Internet-Speed-Test/blob/main/docs/releases/release-notes.md)
+
+[首个公开标签源码](https://github.com/yuchen0x1/Internet-Speed-Test/tree/v1.8.0)
+
+<a id="v1-7-0"></a>
+
+## v1.7.0（历史开发记录，2026-11-07）
+
+### 新增与改进
+
+- 测速页加入 SpeedTest.cn、运营商、Ookla、FAST.com 和 Cloudflare 等固定 HTTPS 官网入口，由系统浏览器打开。
+- 增加测速过程可视化，展示真实速率、并发连接、阶段累计流量、负载延迟及阶段事件；非吞吐阶段不伪装成正在传输。
+- 增加经过协议探测的国内 LibreSpeed 兜底节点，保留线上节点不可用时的选择。
+
+### 修复与边界
+
+- 在线列表成功时仍合并内置兜底节点；统一 URL 尾斜杠，避免手动节点匹配失败。
+- 合法 HTTPS 节点不在列表时，可按 LibreSpeed 默认端点尝试，成功与否由真实请求决定。
+- 修复仪表数字动画过冲导致的负速率显示。
+- 官网入口与本机测速是两条流程，第三方网页结果不自动进入本地历史。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-6-0"></a>
+
+## v1.6.0（历史开发记录，2026-11-07）
+
+### 新增
+
+- 增加“批量拨测”页面，对多个目标并发执行本机真实 ICMP 探测，按探测包数显示进度。
+- 展示最快、最慢、平均延迟、丢包比例和每个目标的走势，使用延迟分档配色。
+- 增加域名解析分布，交叉查看系统与多家公共 DNS 返回地址及其出现比例。
+
+### 能力边界
+
+- 数据来自当前电脑到多个目标的探测，不是云端多地区或分布式拨测网络；超时与不可达保留实际结果。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-5-0"></a>
+
+## v1.5.0（历史开发记录，2026-11-07）
+
+### 新增
+
+- 历史页增加完成次数、平均下载/上传/延迟、最佳下载等统计卡和日均下载对比。
+- 增加延迟与连续探测失败告警，可配置目标和阈值，并设置告警冷却，减少重复通知。
+- 增加历史保留策略，可永久保留或按设置清理过期记录。
+- 增加本机 Prometheus `/metrics` 端点，提供历史与最近测速、网络连通性等指标，便于接入指标采集工具。
+
+### 能力边界
+
+- 指标端点仅监听回环地址，端口可配置；不自动向局域网开放，也没有内置 Grafana 服务。
+- 本阶段统计基于已加载记录；完整筛选范围汇总在 v1.12.0 完善。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-4-0"></a>
+
+## v1.4.0（历史开发记录，2026-11-07）
+
+### 新增
+
+- 网络监控页增加连续 Ping 点图，以及平均、最小、最大、抖动与丢包统计。
+- 诊断页增加常用服务连通性矩阵，以真实 TCP 探测展示可达性和延迟。
+- 质量页增加延迟、抖动、丢包、下载和上传五维雷达，节点页增加节点延迟可视化。
+- 历史页增加按日平均下载速度显示的热力图。
+- 测速完成后可复制结果摘要到剪贴板，便于分享或故障反馈。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-3-0"></a>
+
+## v1.3.0（历史开发记录，2026-11-07）
+
+### 体验改进
+
+- 引入阻尼弹簧数字动画，改善仪表读数随实时样本变化时的过渡。
+- 增加活动柱和测速阶段氛围效果，随实际速率与阶段变化反馈。
+- 调整深浅主题下的光效与视觉层次，保持测量数据由真实引擎事件驱动。
+
+本阶段以已有功能的显示体验为主，没有据此新增测速协议或修改测速公式的记录。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-2-0"></a>
+
+## v1.2.0（历史开发记录，2026-11-07）
+
+### 新增
+
+- 增加按间隔执行的后台计划测速，保存调度时间，并在手动测速进行时避免重入。
+- 接通计划测速完成/失败和网络断开/恢复的桌面通知路径。
+- 托盘增加“开始测速”和实时收发速率提示。
+- 增加路由逐跳质量分析、系统与公共 DNS 一致性比较，以及基于 STUN 的 NAT 检测。
+
+### 能力边界
+
+- UDP、ICMP 或目标节点受限制时展示超时、查询失败或受限信息；NAT 结果为探测条件下的判断，不作为所有网络场景的保证。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-1-0"></a>
+
+## v1.1.0（历史开发记录，2026-11-07）
+
+### 新增
+
+- 增加 `cli speedtest --json` 命令行模式，与桌面端复用测速引擎，分别输出进度和结果。
+- 增加历史详情回放，查看保存的完整指标、测试条件与下载/上传/延迟曲线。
+
+### 改进
+
+- Windows ICMP 路径改用系统 API，减少对子进程及文本解析的依赖，无需管理员权限。
+- 调整上传流水线与响应处理，减少分块之间的等待，保留原有稳定窗口均值口径。
+- 分离引擎事件输出，支持桌面和命令行复用同一执行流程。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
+
+<a id="v1-0-0"></a>
+
+## v1.0.0（历史开发记录，2026-11-07）
+
+### 初始能力
+
+- 建立 React/TypeScript 与 Tauri/Rust 桌面应用，提供 Windows 窗口、导航、主题及设置持久化。
+- 提供 LibreSpeed 和 Cloudflare 多流下载/上传测速、延迟与抖动采样、负载延迟和可解释质量分析。
+- 提供网卡、网关、DNS、TCP、HTTPS、IPv6、Ping 和路由追踪等基础诊断入口。
+- 以 SQLite 保存本地测速历史，支持筛选、排序、对比、CSV/JSON 导出和 HTML 报告。
+- 提供网卡收发监控、测速节点探测与收藏、自动优选和自定义节点配置。
+
+本节仅重建开发文档记录的初始能力；没有对应公开标签或 Release，不宣称存在可下载的 v1.0.0 正式安装包。
+
+依据：[历史开发验证记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 与 [功能演进记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/ROADMAP.md)。本节未创建新标签、安装包或 GitHub Release。
