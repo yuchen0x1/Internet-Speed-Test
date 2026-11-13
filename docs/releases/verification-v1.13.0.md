@@ -19,6 +19,13 @@ Rust 告警对应 RUSTSEC-2024-0370、RUSTSEC-2026-0371、RUSTSEC-2026-0370、RU
 
 开发阶段的原生窗口、切页、停止、重载和 CSV/JSON 实际保存证据见 [开发验收记录](../evolution-batch-metrics-2026-11-13.md)，这些场景不代表完整跨版本安装已经验证。
 
+## 本地签名构建
+
+- PASS：`npm run build:release` 生成 Windows x64 NSIS 安装包与 `.exe.sig`，版本为 1.13.0。
+- PASS：使用 updater 相同的 minisign-verify 0.3.0 库验证安装包与客户端公钥，确认签名受保护版本是 1.13.0；修改文件最后一个字节会导致验签失败。
+- 本地安装包 SHA-256：`fb39900deb4125f108cc925b69815b6ecfc4f80f8f6ea5391cc831f44e927fe3`。GitHub runner 会独立重建，远端包的校验值另行核对，不能假定两次构建字节相同。
+- Authenticode：主程序和 NSIS 包均为 NotSigned，保留已知限制。
+
 ## 发布与资产核对
 
 发布源：[v1.13.0](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.13.0)。本轮按现有 Release 工作流发布 Windows x64 安装包、`.exe.sig`、`latest.json` 与 `SHA256SUMS.txt`，发布后另行核对远端实物。

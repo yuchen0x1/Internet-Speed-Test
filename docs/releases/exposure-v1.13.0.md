@@ -2,17 +2,25 @@
 
 ## 1. 总览
 
-本轮按 `reverse-engineering-exposure-audit` 技能扫描实际前端产物与 Windows 可执行文件，并复核待提交文件及发布资产范围。原始报告只保留在本地忽略目录，执行结果在扫描后补充；静态检查不构成绝对安全证明。
+本轮按 `reverse-engineering-exposure-audit` 技能扫描签名构建对应的实际 `dist/` 与 Windows 主程序，并复核待提交范围。web 自动评分 100/A（10 个文件，无发现），native 自动评分 69/C（1 个 PE）。评分仅作启发式排序，不是安全认证；原始报告保留在本地忽略目录，不上传二进制字符串或构建机路径。
 
 ## 2. 发现清单
 
-检查范围：源码映射、凭证标记、私有数据、原生调试信息、系统签名、更新签名及版本绑定。
+| 编号 | 严重度与人工判断 | 证据 | 分析路径 |
+| --- | --- | --- | --- |
+| PE-SIGN | 高，保留已知限制 | PowerShell 检查主程序及 NSIS 包均为 NotSigned；没有 Authenticode 证书 | PE 证书目录/系统验签 |
+| LEAK-INTRANET | 工具报高，人工排除个人网络泄露 | 固定回环 127.0.0.1，用于开发资源和本机指标，不是用户网络清单 | 字符串提取 |
+| PE-PDB | 工具报中，人工降为信息 | CodeView 仅记录 `netvision_pro.pdb` 文件名；PDB 文件不分发 | PE 调试目录 |
+| PE-CFG | 低，保留 | 未检测到 Control Flow Guard 标志，未等同于已证实的可利用漏洞 | PE load config |
+| WEB-SOURCEMAP / SECRET | 未命中 | dist 无源码映射/凭证标记；候选提交无私钥/令牌模式或数据库/缓存文件 | 静态扫描与提交范围检查 |
 
 ## 3. 逐项证据与措施
 
 - 前端沿用 `sourcemap: false`，Rust release 使用 `strip = true`。
 - 仅分发 Windows 安装包、minisign 签名、更新清单及 SHA-256 清单；排除数据库、设置、密钥、密码、PDB、缓存及原始测试输出。
 - 客户端公钥与 `requireSignedVersion` 保留，签名私钥仅由既有受保护目录或 GitHub Secrets 提供。
+- PASS：使用锁定的 minisign-verify 库验证本地实际 NSIS 文件，签名与内置公钥匹配、受保护版本为 1.13.0；改动文件字节会拒绝验签。版本字段仅在验签成功后读取，与锁定 updater 的校验顺序一致。
+- Windows Authenticode 尚未配置，不伪造证书或把 minisign 当作系统代码签名。
 
 ## 4. 客户端无法解决的问题
 
