@@ -2,7 +2,7 @@
 
 **验证日期**：2026-11-09
 **环境**：Windows 11 x64、以太网、Realtek Gaming 2.5GbE、协商速率 1.0 Gbps、WebView2 157，以及已构建的 Tauri release 可执行文件。
-**验证对象**：[src-tauri/target/release/netvision-pro.exe](../src-tauri/target/release/netvision-pro.exe)
+**验证对象**：当时位于 `src-tauri/target/release/netvision-pro.exe` 的 v1.9.0 本地构建。该路径为可清理的构建产物，不纳入仓库；公开下载见 [v1.9.0 Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.9.0)。
 
 ## 真实 UI 走查
 
@@ -40,7 +40,7 @@
 
 - 诊断界面会展示本机网卡、MAC、局域网地址、IPv6、主机名和公网信息；提交的文档截图采用用户提供的最终素材。
 - 文档未提交历史数据库、设置文件、令牌或密钥。
-- 原有 `docs/screenshots/*.png` 未删除；`*-verified.png` 作为本轮文档展示素材。
+- 该次验证保留了原始截图；2026-11-13 仓库清理时，未脱敏原图已移入本机回收站，文档继续使用 `*-verified.png` 素材。
 
 ## 已知限制
 

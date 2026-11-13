@@ -1,9 +1,55 @@
-node_modules/
-dist/
-src-tauri/target/
-src-tauri/gen/schemas/
+# Rebuildable dependencies and build output
+/node_modules/
+/dist/
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# Local audits, test runs, and driver output
+/.autonomous-upgrade/
+/.evolution/
+/NVIDIA Corporation/
+
+# Credentials and local environment (keep shareable examples)
+.env
+.env.*
+!.env.example
+*.key
+*.key.*
+*.pem
+*.p12
+*.pfx
+*.password
+*.password.*
+
+# Private application data and recovery copies
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+settings.json
+settings.json.*
+auto_test_state.json
+
+# Only reviewed, redacted documentation screenshots belong in Git
+/docs/screenshots/*
+!/docs/screenshots/*-verified.png
+
+# Local installers, debug output, and temporary files
+*.exe
+*.exe.sig
+*.msi
+*.msix
+*.pdb
+*.dmp
 *.log
+*.tmp
+*.bak
+*.bak.*
+*.orig
+*.rej
 nul
 .DS_Store
 Thumbs.db
-.autonomous-upgrade/
+Desktop.ini
