@@ -29,7 +29,7 @@
 
 ## v1.13.0 (2026-11-13)
 
-仅提供 **Windows 10/11 x64 电脑版**。发布时间与源码提交见 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.13.0) 与 [版本标签](https://github.com/yuchen0x1/Internet-Speed-Test/tree/v1.13.0)。
+正式发布：**2026-11-13 20:11:52（北京时间）**。源码提交：[4bce713](https://github.com/yuchen0x1/Internet-Speed-Test/commit/4bce7136b7cc142ff8f6b039c4d184e510aa41e4)。仅提供 **Windows 10/11 x64 电脑版**。
 
 本版重点：让批量拨测可以恢复、留存结果，监控指标准确反映实际测量。
 
@@ -59,7 +59,7 @@
 ### 下载与记录
 
 - [Windows x64 安装包](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.13.0/NetVision.Pro_1.13.0_x64-setup.exe)。
-- Release 同时提供 `.exe.sig`、`latest.json` 和 `SHA256SUMS.txt`；SHA-256 以该版本校验清单为准。
+- 安装包 SHA-256：`694547797b64e1480f85ba09c953605a5237029324573fc162515981aea5fc44`。Release 同时提供 `.exe.sig`、`latest.json` 和 `SHA256SUMS.txt`。
 - [本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.12.0...v1.13.0) · [发布验证](docs/releases/verification-v1.13.0.md) · [产物暴露面复核](docs/releases/exposure-v1.13.0.md)。
 - [开发阶段研究、真实运行截图与验收边界](docs/evolution-batch-metrics-2026-11-13.md)。
 

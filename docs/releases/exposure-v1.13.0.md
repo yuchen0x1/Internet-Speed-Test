@@ -21,6 +21,7 @@
 - 客户端公钥与 `requireSignedVersion` 保留，签名私钥仅由既有受保护目录或 GitHub Secrets 提供。
 - PASS：使用锁定的 minisign-verify 库验证本地实际 NSIS 文件，签名与内置公钥匹配、受保护版本为 1.13.0；改动文件字节会拒绝验签。版本字段仅在验签成功后读取，与锁定 updater 的校验顺序一致。
 - Windows Authenticode 尚未配置，不伪造证书或把 minisign 当作系统代码签名。
+- 发布后复核：四个真实下载附件的 SHA-256/大小与 GitHub 记录一致，远端 NSIS 包通过同款 minisign 校验、版本绑定 1.13.0，篡改字节被拒绝；稳定端点只提供 Windows x64。详见 [发布验证](verification-v1.13.0.md)。
 
 ## 4. 客户端无法解决的问题
 
