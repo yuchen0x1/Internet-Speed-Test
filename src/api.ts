@@ -16,10 +16,12 @@ import type {
   GatewayReport,
   HistoryRow,
   HistorySummary,
+  HistoryStatus,
   HttpsResult,
   IpVersionCheck,
   LocalNetInfo,
   MonitorTick,
+  MonitorBucket,
   NatReport,
   NetStatus,
   PingReport,
@@ -66,6 +68,8 @@ export const api = {
   appInfo: () => invoke<AppInfo>("get_app_info"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   setSettings: (settings: AppSettings) => invoke<AppSettings>("set_settings", { settings }),
+  settingsExport: () => invoke<string>("settings_export"),
+  settingsImport: () => invoke<AppSettings>("settings_import"),
   netStatus: () => invoke<NetStatus>("get_network_status"),
 
   serversList: () => invoke<ServerNodeInfo[]>("servers_list"),
@@ -84,27 +88,41 @@ export const api = {
   speedtestPhase: () => invoke<string>("speedtest_phase"),
   openSpeedtestService: (service: string) => invoke<void>("open_speedtest_service", { service }),
 
-  historyList: (opts?: { from?: string; to?: string; desc?: boolean; limit?: number; cursorId?: number }) =>
+  historyList: (opts?: { from?: string; to?: string; query?: string; status?: HistoryStatus; desc?: boolean; limit?: number; cursorId?: number }) =>
     invoke<HistoryRow[]>("history_list", {
       from: opts?.from ?? null,
       to: opts?.to ?? null,
+      query: opts?.query ?? null,
+      status: opts?.status ?? null,
       desc: opts?.desc ?? true,
       limit: opts?.limit ?? 500,
       cursorId: opts?.cursorId ?? null,
     }),
   historyDetail: (id: number) => invoke<TestResult | null>("history_detail", { id }),
-  historyCount: (opts?: { from?: string; to?: string }) =>
+  historyCount: (opts?: { from?: string; to?: string; query?: string; status?: HistoryStatus }) =>
     invoke<number>("history_count", {
       from: opts?.from ?? null,
       to: opts?.to ?? null,
+      query: opts?.query ?? null,
+      status: opts?.status ?? null,
     }),
   historyDelete: (id: number) => invoke<void>("history_delete", { id }),
-  historySummary: (opts?: { from?: string; to?: string }) =>
-    invoke<HistorySummary>("history_summary", { from: opts?.from ?? null, to: opts?.to ?? null }),
+  historySummary: (opts?: { from?: string; to?: string; query?: string; status?: HistoryStatus }) =>
+    invoke<HistorySummary>("history_summary", {
+      from: opts?.from ?? null,
+      to: opts?.to ?? null,
+      query: opts?.query ?? null,
+      status: opts?.status ?? null,
+    }),
   historyClear: () => invoke<void>("history_clear"),
-  historyExport: (format: "csv" | "json", opts?: { from?: string; to?: string; desc?: boolean }) =>
+  historyExport: (format: "csv" | "json", opts?: { from?: string; to?: string; query?: string; status?: HistoryStatus; desc?: boolean }) =>
     invoke<ExportOutcome>("history_export", {
-      format, from: opts?.from ?? null, to: opts?.to ?? null, desc: opts?.desc ?? true,
+      format,
+      from: opts?.from ?? null,
+      to: opts?.to ?? null,
+      query: opts?.query ?? null,
+      status: opts?.status ?? null,
+      desc: opts?.desc ?? true,
     }),
   historyExportReport: (id: number) => invoke<string>("history_export_report", { id }),
 
@@ -113,7 +131,11 @@ export const api = {
   monitorSetPaused: (paused: boolean) => invoke<void>("monitor_set_paused", { paused }),
   monitorHistory: (windowSecs: number) =>
     invoke<MonitorTick[]>("monitor_history", { windowSecs }),
+  monitorAggregate: (windowSecs: number, bucketSecs: 60 | 300 | 3600) =>
+    invoke<MonitorBucket[]>("monitor_aggregate", { windowSecs, bucketSecs }),
   monitorLatest: () => invoke<MonitorTick | null>("monitor_latest"),
+  monitorExport: (windowSecs: number, format: "csv" | "json") =>
+    invoke<string>("monitor_export", { windowSecs, format }),
   prometheusStatus: () => invoke<PrometheusStatus>("prometheus_status"),
   updaterCheck: () => invoke<UpdaterInfo | null>("updater_check"),
   updaterInstall: () => invoke<void>("updater_install"),
@@ -147,6 +169,8 @@ export const api = {
     invoke<DnsConsistencyReport>("diag_dns_consistency", { domain }),
   diagNatType: () => invoke<NatReport>("diag_nat_type"),
   diagConnectivityGrid: () => invoke<ConnectivityEntry[]>("diag_connectivity_grid"),
+  diagExportReport: (format: "json" | "html", report: unknown) =>
+    invoke<string>("diag_export_report", { format, report }),
   pingmonStart: (host: string) => invoke<void>("pingmon_start", { host }),
   pingmonStop: () => invoke<void>("pingmon_stop"),
   pingmonHost: () => invoke<string | null>("pingmon_host"),

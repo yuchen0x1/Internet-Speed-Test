@@ -1,7 +1,7 @@
 // 应用外壳:启动动画 / 主题 / 事件绑定 / 页面路由
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { useApp } from "./store/app";
+import { useApp, type PageId } from "./store/app";
 import { useTest } from "./store/test";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
@@ -28,6 +28,7 @@ export default function App() {
   const bindTest = useTest((s) => s.bind);
   const syncRunning = useTest((s) => s.syncRunning);
   const [splash, setSplash] = useState(true);
+  const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     boot();
@@ -43,6 +44,62 @@ export default function App() {
   useEffect(() => {
     return installGlobalErrorHandlers((kind, text) => useApp.getState().toast(kind, text));
   }, []);
+
+  // 键盘用户不必先定位到测速页按钮即可控制当前测速。
+  // Ctrl/Cmd+Enter 开始或停止，Escape 取消；输入控件内保留原生编辑语义。
+  useEffect(() => {
+    if (!booted) return;
+    const isEditable = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      return !!el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (isEditable(e.target)) return;
+      const test = useTest.getState();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === "Enter") {
+        e.preventDefault();
+        const action = test.running ? api.speedtestStop() : api.speedtestStart();
+        action.catch((error) => useApp.getState().toast("error", `测速操作失败：${String(error)}`));
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^[1-8]$/.test(e.key)) {
+        const pages: PageId[] = [
+          "speedtest", "quality", "diagnostics", "history",
+          "servers", "batchtest", "monitor", "settings",
+        ];
+        const next = pages[Number(e.key) - 1];
+        if (next) {
+          e.preventDefault();
+          useApp.getState().setPage(next);
+          return;
+        }
+      }
+      if (e.key === "Escape" && test.running) {
+        e.preventDefault();
+        api.speedtestStop().catch((error) => useApp.getState().toast("error", `取消测速失败：${String(error)}`));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [booted]);
+
+  // 页面切换后把焦点放回内容区，避免键盘用户继续操作已卸载页面的控件。
+  useEffect(() => {
+    if (!booted) return;
+    const title = {
+      speedtest: "网络测速",
+      quality: "网络质量",
+      diagnostics: "网络诊断",
+      history: "测速历史",
+      servers: "测速节点",
+      batchtest: "批量拨测",
+      monitor: "网络监控",
+      settings: "设置与关于",
+    }[page];
+    document.title = title ? `${title} · NetVision Pro` : "NetVision Pro";
+    const focus = window.setTimeout(() => mainRef.current?.focus(), 0);
+    return () => window.clearTimeout(focus);
+  }, [booted, page]);
 
   // 与后端引擎对账:托盘启动或窗口重载后,前端可能错过事件而状态停在 idle。
   // 启动完成时对一次,窗口重新获得焦点时再对一次。
@@ -98,6 +155,7 @@ export default function App() {
 
   return (
     <>
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
       {splash && (
         <div className={`splash ${!booted ? "waiting" : "leaving"}`}>
           <div className="splash-logo">
@@ -112,11 +170,18 @@ export default function App() {
         <TitleBar />
         <div className="app-body">
           <Sidebar />
-          <main className="main" key={page}>
+          <main
+            className="main"
+            id="main-content"
+            ref={mainRef}
+            key={page}
+            tabIndex={-1}
+            aria-label="主要内容"
+          >
             <div className="page-enter">
               {/* 单页渲染失败只影响该页,不卸载整个应用;切页后自动复位 */}
               <ErrorBoundary resetKey={page}>
-                <Suspense fallback={<div className="empty">页面加载中…</div>}>
+                <Suspense fallback={<div className="empty" role="status" aria-live="polite">页面加载中…</div>}>
                   {page === "speedtest" && <SpeedTestPage />}
                   {page === "quality" && <QualityPage />}
                   {page === "diagnostics" && <DiagnosticsPage />}

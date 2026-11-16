@@ -34,6 +34,9 @@ jobs:
       - name: 检查版本日志同步
         run: npm run docs:check
 
+      - name: 检查 IPC 契约
+        run: npm run ipc:check
+
       - name: 前端依赖审计
         run: npm audit --audit-level=high --registry=https://registry.npmjs.org
 

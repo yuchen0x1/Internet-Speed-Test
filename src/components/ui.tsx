@@ -93,9 +93,9 @@ export function Toasts() {
   const icons = { success: "check", error: "alert", warn: "alert", info: "info" } as const;
   const colors = { success: "var(--green)", error: "var(--red)", warn: "var(--amber)", info: "var(--cyan)" } as const;
   return (
-    <div className="toasts">
+    <div className="toasts" aria-live="polite" aria-atomic="false">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`} onClick={() => dismissToast(t.id)}>
+        <div key={t.id} className={`toast ${t.kind}`} role={t.kind === "error" ? "alert" : "status"} onClick={() => dismissToast(t.id)}>
           <span style={{ color: colors[t.kind], display: "grid", placeItems: "center" }}>
             <Icon name={icons[t.kind]} size={17} />
           </span>

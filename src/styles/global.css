@@ -77,6 +77,23 @@ html.theme-light {
 
 * { box-sizing: border-box; }
 
+/* 键盘用户进入窗口时可直接跳过标题栏和导航。 */
+.skip-link {
+  position: fixed;
+  left: 14px;
+  top: -48px;
+  z-index: 1200;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+  text-decoration: none;
+  transition: top .16s ease;
+}
+.skip-link:focus-visible { top: 12px; }
+
 html, body, #root {
   margin: 0;
   height: 100%;
@@ -140,6 +157,17 @@ input, textarea { user-select: text; }
   overflow-x: hidden;
   padding: 22px 26px 30px;
   position: relative;
+}
+.main:focus { outline: none; }
+
+/* Respect the operating system preference even before the app settings load. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ============ 标题栏 ============ */

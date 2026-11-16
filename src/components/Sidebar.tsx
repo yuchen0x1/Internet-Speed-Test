@@ -1,5 +1,4 @@
 // 左侧导航:按钮天然可聚焦/可回车触发;补 aria-current 与 Ctrl+1..8 快捷切换
-import { useEffect } from "react";
 import { useApp, type PageId } from "../store/app";
 import { Icon, type IconName } from "./Icon";
 
@@ -19,24 +18,6 @@ export function Sidebar() {
   const setPage = useApp((s) => s.setPage);
   const appInfo = useApp((s) => s.appInfo);
 
-  // 桌面软件惯例:Ctrl+1..8 直达对应页面。输入框内不拦截,避免影响文本编辑。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
-        return;
-      }
-      const idx = Number(e.key) - 1;
-      if (!Number.isInteger(idx) || idx < 0 || idx >= NAV.length) return;
-      e.preventDefault();
-      setPage(NAV[idx].id);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setPage]);
-
   return (
     <nav className="sidebar" aria-label="主导航">
       {NAV.map((n, i) => {
@@ -47,6 +28,7 @@ export function Sidebar() {
             className={`nav-item ${active ? "active" : ""}`}
             onClick={() => setPage(n.id)}
             aria-current={active ? "page" : undefined}
+            aria-keyshortcuts={`Ctrl+${i + 1}`}
             title={`${n.label}(Ctrl+${i + 1})`}
           >
             <span className="icon-wrap" aria-hidden="true">

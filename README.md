@@ -10,14 +10,19 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 ## 最新更新
 
-### v1.13.0 · 2026-11-13
+### v1.14.0 · 2026-11-16
 
-- 拨测支持任务隔离、重载恢复、目标去重与 8 路并发；按真实包数展示进度，停止保留部分结果。
-- 支持拨测 CSV/JSON 导出，未测目标保持未知，超时曲线断开显示。
-- Prometheus 使用最近成功测速值，修正时间与历史计数类型，新增完成/失败/取消 Gauge。
-- [研究、原生截图、测试与剩余边界](docs/evolution-batch-metrics-2026-11-13.md)。本版仅提供 Windows 10/11 x64 电脑版。
+- 历史页新增按节点、供应商、接口、IP、ISP 和状态筛选，列表、统计、分页和导出使用同一筛选口径。
+- 诊断页新增有界并发的基础检查流程，显示逐项进度和失败汇总。
+- 设置页支持带 schema 版本的 JSON 备份/恢复，监控页支持当前时间窗 CSV/JSON 导出。
+- 监控页补充当前窗口的时间桶均值/P50/P95/峰值摘要；CLI JSON 增加实验元数据，并新增历史查询/导出命令。
+- 诊断页支持脱敏 JSON/HTML 报告；CI 增加前端 invoke、Rust 注册与命令定义的 IPC 契约检查。
+- 补充 Ctrl/Cmd+1…8 页面快捷键、测速快捷键、跳过导航、主体焦点恢复、页面标题、ARIA 状态语义和系统 reduced-motion 响应。
+- 项目审计、15 个开源项目对标、42 项升级路线图和本轮交付边界见 [升级报告](UPGRADE_REPORT.md)。
 
-当前公开稳定版为 [v1.13.0](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.13.0)。完整版本历史、升级方式与早期开发记录见 [发布说明](docs/releases/release-notes.md)。
+> 本版已发布 Windows x64 安装包；安装器/更新 E2E、屏幕阅读器、高 DPI 和长期运行仍需独立验收。
+
+当前公开稳定版为 [v1.14.0](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.0)。完整版本历史、升级方式与早期开发记录见 [发布说明](docs/releases/release-notes.md)。
 
 ## 界面预览
 
@@ -77,7 +82,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 - **系统**：Windows 10/11 x64。
 - **运行依赖**：Windows WebView2；Windows 10/11 通常已预装。
-- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.13.0_x64-setup.exe`。
+- **安装包**：在 [Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 下载 `NetVision.Pro_1.14.0_x64-setup.exe`。
 - **安装模式**：Tauri NSIS `currentUser`，默认按当前用户安装，不需要管理员权限。
 - **WebView2 安装**：安装器使用 `downloadBootstrapper` 模式，在缺少运行时的环境中引导安装。
 - **应用内更新**：v1.11.0 起可在「设置与关于 → 关于」点击「检查更新」下载并安装新版本（更新包经 minisign 签名校验，安装完成后自动重启）。
@@ -121,6 +126,8 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 进度和阶段事件写入 `stderr`，结果写入 `stdout`；`--json` 返回完整结果对象。退出码为：`0` 完成、`1` 参数错误、`2` 已取消、`3` 测速失败。
 
+`cli speedtest --json` 还会输出不含节点 URL/令牌的实验元数据；历史可通过 `cli history list` 或 `cli history export --format csv|json` 只读取出，支持日期、关键词和状态筛选。
+
 ## 测量口径
 
 1. 检查网络接口，合并在线节点、内置兜底节点和 Cloudflare 边缘节点，并对候选节点进行延迟与下载能力探测。
@@ -149,9 +156,12 @@ npm run icons
 npm run typecheck
 npm run test
 npm run build
+npm run ipc:check
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 npm run tauri build
 ```
+
+`npm run ipc:check` 会在不启动桌面窗口的情况下对比前端 `invoke` 调用、Rust `invoke_handler` 注册表和 Rust 命令定义，提前发现 IPC 命令漂移。
 
 开发运行：
 

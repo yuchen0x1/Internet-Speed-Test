@@ -30,7 +30,7 @@ const button = (text: string) => [...host.querySelectorAll("button")].find((b) =
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.clearAllMocks();
-  useHistoryUi.setState({ from: "", to: "", desc: true, selected: [] });
+  useHistoryUi.setState({ from: "", to: "", desc: true, query: "", status: "", selected: [] });
   useApp.setState({ toast });
   vi.mocked(api.historyList).mockResolvedValue([row(1), row(2)]);
   vi.mocked(api.historySummary).mockResolvedValue({
@@ -97,5 +97,19 @@ describe("history interactions", () => {
     expect(host.querySelectorAll("tbody tr")).toHaveLength(102);
     expect(host.textContent).toContain("62.0");
     expect(api.historySummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies text and status filters to list, summary, and export", async () => {
+    await act(async () => root.render(<HistoryPage />));
+    await act(async () => {
+      useHistoryUi.getState().setQuery("Alpha");
+      useHistoryUi.getState().setStatus("failed");
+    });
+    expect(api.historySummary).toHaveBeenLastCalledWith({ query: "Alpha", status: "failed" });
+    expect(api.historyList).toHaveBeenLastCalledWith({
+      from: undefined, to: undefined, query: "Alpha", status: "failed", desc: true, limit: 101,
+    });
+    await act(async () => button("CSV").click());
+    expect(api.historyExport).toHaveBeenCalledWith("csv", { query: "Alpha", status: "failed", desc: true });
   });
 });

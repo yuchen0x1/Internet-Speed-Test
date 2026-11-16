@@ -17,6 +17,7 @@ export function SettingsPage() {
   const nodes = useServers((s) => s.nodes);
   const loadServers = useServers((s) => s.load);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [backupBusy, setBackupBusy] = useState<"export" | "import" | null>(null);
   // 端点真实状态:设置里的开关只代表意图,绑定可能失败(端口占用)
   const [promStatus, setPromStatus] = useState<PrometheusStatus | null>(null);
 
@@ -83,6 +84,36 @@ export function SettingsPage() {
     } catch (e) {
       setUpdMessage(`更新失败:${errMsg(e)}`);
       setUpdState("idle");
+    }
+  };
+
+  const exportSettings = async () => {
+    setBackupBusy("export");
+    try {
+      const path = await api.settingsExport();
+      toast("success", `设置已导出：${path}`);
+    } catch (e) {
+      if (!isCancelError(e)) toast("error", `设置导出失败：${errMsg(e)}`);
+    } finally {
+      setBackupBusy(null);
+    }
+  };
+
+  const importSettings = async () => {
+    setBackupBusy("import");
+    try {
+      const imported = await api.settingsImport();
+      // IPC 返回的是后端已落盘的权威快照，直接替换本地 store，避免
+      // 继续使用导入前的主题、监控和更新开关。
+      useApp.setState({ settings: imported });
+      useApp.getState().applyTheme();
+      await loadServers();
+      await refreshPromStatus();
+      toast("success", "设置已导入并生效");
+    } catch (e) {
+      if (!isCancelError(e)) toast("error", `设置导入失败：${errMsg(e)}`);
+    } finally {
+      setBackupBusy(null);
     }
   };
 
@@ -409,18 +440,24 @@ export function SettingsPage() {
           </div>
           <div className="set-row">
             <div>
-              <div className="label">数据导出</div>
-              <div className="desc">将全部测速历史导出为 CSV / JSON</div>
+              <div className="label">数据与设置备份</div>
+              <div className="desc">导出测速历史，或把当前设置保存为可迁移的 JSON 备份</div>
             </div>
-            <div className="row gap8">
-              <button className="btn sm" onClick={async () => {
+            <div className="row gap8 wrap">
+              <button className="btn sm" disabled={backupBusy !== null} onClick={async () => {
                 try { toast("success", `已导出:${await api.historyExport("csv")}`); }
                 catch (e) { if (!isCancelError(e)) toast("error", String(e)); }
-              }}>CSV</button>
-              <button className="btn sm" onClick={async () => {
+              }}>历史 CSV</button>
+              <button className="btn sm" disabled={backupBusy !== null} onClick={async () => {
                 try { toast("success", `已导出:${await api.historyExport("json")}`); }
                 catch (e) { if (!isCancelError(e)) toast("error", String(e)); }
-              }}>JSON</button>
+              }}>历史 JSON</button>
+              <button className="btn sm" disabled={backupBusy !== null} onClick={exportSettings}>
+                {backupBusy === "export" ? "导出中…" : "备份设置"}
+              </button>
+              <button className="btn sm" disabled={backupBusy !== null} onClick={importSettings}>
+                {backupBusy === "import" ? "导入中…" : "恢复设置"}
+              </button>
             </div>
           </div>
           <div className="set-row">

@@ -46,6 +46,27 @@ pub struct MonitorTick {
     pub ifaces: Vec<IfaceTick>,
 }
 
+/// A deterministic summary for one wall-clock time bucket.
+///
+/// The ring buffer currently retains one hour of raw samples. Aggregation is
+/// deliberately performed from those samples so the raw export remains the
+/// source of truth and callers can choose a bucket size without changing the
+/// sampling loop.
+#[derive(Debug, Clone, Serialize)]
+pub struct MonitorBucket {
+    pub start_ts_ms: u64,
+    pub end_ts_ms: u64,
+    pub sample_count: u32,
+    pub rx_avg_bps: f64,
+    pub rx_p50_bps: f64,
+    pub rx_p95_bps: f64,
+    pub rx_peak_bps: f64,
+    pub tx_avg_bps: f64,
+    pub tx_p50_bps: f64,
+    pub tx_p95_bps: f64,
+    pub tx_peak_bps: f64,
+}
+
 pub struct MonitorHandle {
     enabled: AtomicBool,
     paused: AtomicBool,
@@ -91,14 +112,7 @@ impl MonitorHandle {
 
     /// 返回 window_secs 时间窗内的样本(降采样至 ≤256 点)
     pub fn history(&self, window_secs: u32) -> Vec<MonitorTick> {
-        let window_secs = window_secs.clamp(10, 3600) as u64;
-        let cutoff = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
-            .saturating_sub(window_secs * 1000);
-        let buf = crate::safe_lock::lock(&self.buffer);
-        let recent: Vec<MonitorTick> = buf.iter().filter(|t| t.ts_ms >= cutoff).cloned().collect();
+        let recent = self.history_window(window_secs);
         if recent.len() <= 256 {
             return recent;
         }
@@ -106,9 +120,82 @@ impl MonitorHandle {
         recent.into_iter().step_by(step).collect()
     }
 
+    /// 返回导出用的原始时间窗样本。导出不降采样，最多覆盖环形缓冲保留的 1 小时。
+    pub fn export_history(&self, window_secs: u32) -> Vec<MonitorTick> {
+        self.history_window(window_secs)
+    }
+
+    /// Return aggregate buckets for the current time window. The aggregation
+    /// uses the same raw samples as history/export, so a caller can compare a
+    /// bucket summary with the underlying CSV/JSON evidence.
+    pub fn aggregate(&self, window_secs: u32, bucket_secs: u32) -> Vec<MonitorBucket> {
+        aggregate_ticks(&self.history_window(window_secs), bucket_secs)
+    }
+
+    fn history_window(&self, window_secs: u32) -> Vec<MonitorTick> {
+        let window_secs = window_secs.clamp(10, 3600) as u64;
+        let cutoff = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+            .saturating_sub(window_secs * 1000);
+        let buf = crate::safe_lock::lock(&self.buffer);
+        buf.iter().filter(|t| t.ts_ms >= cutoff).cloned().collect()
+    }
+
     pub fn latest(&self) -> Option<MonitorTick> {
         crate::safe_lock::lock(&self.buffer).back().cloned()
     }
+}
+
+fn percentile(values: &[f64], p: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let rank = ((sorted.len() as f64) * p).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
+/// Aggregate raw monitor ticks into epoch-aligned buckets.
+///
+/// `bucket_secs` is clamped to at least one second for the pure helper. The
+/// Tauri command applies the user-facing allow-list (1 minute, 5 minutes or
+/// 1 hour) before calling this function.
+pub fn aggregate_ticks(ticks: &[MonitorTick], bucket_secs: u32) -> Vec<MonitorBucket> {
+    if ticks.is_empty() {
+        return Vec::new();
+    }
+    let bucket_ms = u64::from(bucket_secs.max(1)) * 1000;
+    let mut grouped: std::collections::BTreeMap<u64, Vec<&MonitorTick>> =
+        std::collections::BTreeMap::new();
+    for tick in ticks {
+        let start = (tick.ts_ms / bucket_ms) * bucket_ms;
+        grouped.entry(start).or_default().push(tick);
+    }
+    grouped
+        .into_iter()
+        .map(|(start, items)| {
+            let rx: Vec<f64> = items.iter().map(|t| t.rx_bps).collect();
+            let tx: Vec<f64> = items.iter().map(|t| t.tx_bps).collect();
+            let rx_sum: f64 = rx.iter().sum();
+            let tx_sum: f64 = tx.iter().sum();
+            MonitorBucket {
+                start_ts_ms: start,
+                end_ts_ms: start.saturating_add(bucket_ms),
+                sample_count: items.len() as u32,
+                rx_avg_bps: rx_sum / items.len() as f64,
+                rx_p50_bps: percentile(&rx, 0.50),
+                rx_p95_bps: percentile(&rx, 0.95),
+                rx_peak_bps: rx.iter().copied().fold(0.0, f64::max),
+                tx_avg_bps: tx_sum / items.len() as f64,
+                tx_p50_bps: percentile(&tx, 0.50),
+                tx_p95_bps: percentile(&tx, 0.95),
+                tx_peak_bps: tx.iter().copied().fold(0.0, f64::max),
+            }
+        })
+        .collect()
 }
 
 /// 启动后台监控任务(App 生命周期内常驻,受设置开关控制)
@@ -215,4 +302,56 @@ pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<M
         }
     });
     handle
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{aggregate_ticks, IfaceTick, MonitorTick};
+
+    fn tick(ts_ms: u64, rx_bps: f64, tx_bps: f64) -> MonitorTick {
+        MonitorTick {
+            ts_ms,
+            rx_bps,
+            tx_bps,
+            rx_total: 0,
+            tx_total: 0,
+            ifaces: vec![IfaceTick {
+                name: "fixture".into(),
+                rx_bps,
+                tx_bps,
+                rx_total: 0,
+                tx_total: 0,
+                up: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn aggregates_epoch_aligned_buckets_with_percentiles_and_peak() {
+        let rows = aggregate_ticks(
+            &[
+                tick(60_001, 10.0, 4.0),
+                tick(60_999, 30.0, 8.0),
+                tick(120_001, 20.0, 6.0),
+            ],
+            60,
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].start_ts_ms, 60_000);
+        assert_eq!(rows[0].end_ts_ms, 120_000);
+        assert_eq!(rows[0].sample_count, 2);
+        assert_eq!(rows[0].rx_avg_bps, 20.0);
+        assert_eq!(rows[0].rx_p50_bps, 10.0);
+        assert_eq!(rows[0].rx_p95_bps, 30.0);
+        assert_eq!(rows[0].rx_peak_bps, 30.0);
+        assert_eq!(rows[1].tx_avg_bps, 6.0);
+    }
+
+    #[test]
+    fn empty_and_zero_bucket_inputs_are_safe() {
+        assert!(aggregate_ticks(&[], 60).is_empty());
+        let rows = aggregate_ticks(&[tick(1, 1.0, 2.0)], 0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sample_count, 1);
+    }
 }

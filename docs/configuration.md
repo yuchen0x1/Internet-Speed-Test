@@ -19,6 +19,8 @@ Windows 桌面版使用 Tauri 的应用数据目录：
 
 设置采用原子写入。首次运行或设置文件不存在时使用默认值；解析失败时先备份为 `settings.json.bak`，再恢复默认设置。
 
+设置页还支持用户主动导出和导入版本化 JSON 备份。导入会检查 schema 版本、字段范围、自定义节点 URL 和重复项；校验或保存失败时不会替换当前有效设置。
+
 CLI 在 Windows 上复用 `%APPDATA%\com.netvisionpro.app`。如果没有 `APPDATA` 环境变量，CLI 会回退到系统临时目录下的 `netvision-pro-cli`。
 
 ## 默认设置

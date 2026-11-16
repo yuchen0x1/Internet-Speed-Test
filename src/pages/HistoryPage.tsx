@@ -10,7 +10,7 @@ import { LineChart, type Series } from "../components/LineChart";
 import { HistoryHeatmap } from "../components/HistoryHeatmap";
 import { ConfirmModal, Modal } from "../components/ui";
 import { Icon } from "../components/Icon";
-import type { HistoryRow, HistorySummary, TestResult } from "../types";
+import type { HistoryRow, HistoryStatus, HistorySummary, TestResult } from "../types";
 
 const HISTORY_PAGE_SIZE = 100;
 
@@ -24,7 +24,11 @@ export function HistoryPage() {
   const toast = useApp((s) => s.toast);
   const lastResult = useTest((s) => s.result);
   // 筛选与选择提升到 store:切页回来不丢(见 store/ui.ts)
-  const { from, to, desc, selected, setFrom, setTo, setRange, toggleDesc, setSelected, toggleSel } = useHistoryUi();
+  const {
+    from, to, desc, query, status, selected,
+    setFrom, setTo, setRange, setQuery, setStatus,
+    toggleDesc, setSelected, toggleSel,
+  } = useHistoryUi();
   const [rows, setRows] = useState<HistoryRow[]>([]);
   // 筛选条件下的真实总条数; rows 可通过游标分页逐步加载,不是全量快照
   const [total, setTotal] = useState(0);
@@ -40,8 +44,26 @@ export function HistoryPage() {
   const nextCursor = useRef<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [detail, setDetail] = useState<TestResult | null>(null);
+  const [queryDraft, setQueryDraft] = useState(query);
   // 请求序号:筛选/排序变更后,慢响应若已过期则丢弃,避免覆盖新结果
   const loadSeq = useRef(0);
+
+  useEffect(() => setQueryDraft(query), [query]);
+
+  const activeFilter = useMemo(() => {
+    const filter: { from?: string; to?: string; query?: string; status?: HistoryStatus } = {};
+    if (from) filter.from = from;
+    if (to) filter.to = to;
+    if (query) filter.query = query;
+    if (status) filter.status = status;
+    return filter;
+  }, [from, to, query, status]);
+  const listFilter = useMemo(() => ({
+    from: from || undefined,
+    to: to || undefined,
+    ...(query ? { query } : {}),
+    ...(status ? { status } : {}),
+  }), [from, to, query, status]);
 
   const openDetail = async (id: number) => {
     try {
@@ -65,7 +87,7 @@ export function HistoryPage() {
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
-    const filter = { from: from || undefined, to: to || undefined };
+    const filter = activeFilter;
     setRows([]);
     setTotal(0);
     setSummary(null);
@@ -81,7 +103,7 @@ export function HistoryPage() {
     try {
       // 列表与总数并发获取:同一筛选口径,避免统计窗口被误当全量
       const [list, stats] = await Promise.all([
-        api.historyList({ ...filter, desc, limit: HISTORY_PAGE_SIZE + 1 }),
+        api.historyList({ ...listFilter, desc, limit: HISTORY_PAGE_SIZE + 1 }),
         api.historySummary(filter),
       ]);
       if (seq !== loadSeq.current) return; // 过期响应:丢弃,不覆盖新筛选结果
@@ -96,7 +118,7 @@ export function HistoryPage() {
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, [from, to, desc, toast]);
+  }, [activeFilter, listFilter, from, to, desc, toast]);
 
   const loadMore = useCallback(async () => {
     if (loading || loadingMore || !hasMore) return;
@@ -105,8 +127,7 @@ export function HistoryPage() {
     setLoadingMore(true);
     try {
       const next = await api.historyList({
-        from: from || undefined,
-        to: to || undefined,
+        ...listFilter,
         desc,
         limit: HISTORY_PAGE_SIZE + 1,
         cursorId: cursorId ?? undefined,
@@ -124,7 +145,7 @@ export function HistoryPage() {
     } finally {
       if (seq === loadSeq.current) setLoadingMore(false);
     }
-  }, [from, to, desc, loading, loadingMore, hasMore, toast]);
+  }, [listFilter, desc, loading, loadingMore, hasMore, toast]);
 
   useEffect(() => {
     load();
@@ -171,7 +192,7 @@ export function HistoryPage() {
     if (invalidRange || exporting) return;
     setExporting(true);
     try {
-      const r = await api.historyExport(format, { from: from || undefined, to: to || undefined, desc });
+      const r = await api.historyExport(format, { ...activeFilter, desc });
       if (r.total > r.exported) {
         toast("warn", `已导出前 ${r.exported} 条(共 ${r.total} 条,超出上限部分被截断):${r.path}`);
       } else {
@@ -220,7 +241,41 @@ export function HistoryPage() {
         </div>
       </div>
 
-      <div className="card pad mb16 history-toolbar" role="group" aria-label="历史日期筛选和导出">
+      <div className="card pad mb16 history-toolbar" role="group" aria-label="历史搜索、日期筛选和导出">
+        <div className="row gap8 wrap mb8">
+          <input
+            type="search"
+            className="text-input"
+            value={queryDraft}
+            onChange={(e) => setQueryDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") setQuery(e.currentTarget.value.trim());
+            }}
+            placeholder="搜索节点、运营商、接口或 IP"
+            aria-label="搜索历史记录"
+            maxLength={120}
+            style={{ minWidth: 260, flex: "1 1 260px" }}
+          />
+          <button className="btn sm" onClick={() => setQuery(queryDraft.trim())} disabled={loading}>
+            <Icon name="search" size={13} /> 搜索
+          </button>
+          {(queryDraft || query) && (
+            <button className="btn ghost sm" onClick={() => { setQueryDraft(""); setQuery(""); }} disabled={loading}>
+              清除搜索
+            </button>
+          )}
+          <select
+            className="select"
+            value={status}
+            onChange={(e) => setStatus(e.target.value as "" | "completed" | "failed" | "cancelled")}
+            aria-label="按状态筛选历史"
+          >
+            <option value="">全部状态</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+            <option value="cancelled">已取消</option>
+          </select>
+        </div>
         <div className="row gap8 wrap">
           <label className="history-date-label">起始日期
             <input type="date" className="text-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-invalid={invalidRange} />
@@ -415,7 +470,7 @@ export function HistoryPage() {
           {rows.length === 0 && (
             <div className="empty">
               <Icon name="history" size={36} />
-              <span>{loading ? "加载中…" : invalidRange ? "请先调整日期范围" : loadError ? "历史暂时无法读取，请重试加载" : from || to ? "这个日期范围没有记录，可调整日期或选择全部日期" : "暂无历史记录，完成一次测速后会自动保存"}</span>
+              <span>{loading ? "加载中…" : invalidRange ? "请先调整日期范围" : loadError ? "历史暂时无法读取，请重试加载" : from || to || query || status ? "当前筛选没有记录，可调整条件或清除筛选" : "暂无历史记录，完成一次测速后会自动保存"}</span>
             </div>
           )}
         </div>

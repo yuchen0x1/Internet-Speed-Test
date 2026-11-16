@@ -4,12 +4,13 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.8.0`～`v1.13.0` 为已有 GitHub Releases；`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。一般使用请下载 [最新稳定版](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest)。
+`v1.8.0`～`v1.14.0` 为已有或本次发布的 GitHub Releases；`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。一般使用请下载 [最新稳定版](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest)。
 
 本文件由 [完整更新日志](docs/releases/release-notes.md) 自动同步；请修改该维护入口后运行 `npm run docs:sync`。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
 
 | 版本 | 日期与状态 | 主要变化 |
 | --- | --- | --- |
+| [v1.14.0](#v1-14-0) | 2026-11-16 · 本次发布 | 历史筛选、诊断编排/报告、设置备份、监控聚合/导出、CLI 与 IPC 契约、键盘与可访问性 |
 | [v1.13.0](#v1-13-0) | 2026-11-13 · 公开发布 | 拨测恢复与导出、真实包数进度、监控指标可信度 |
 | [v1.12.0](#v1-12-0) | 2026-11-13 · 公开发布 | 历史与状态可信度、设置/节点/监控修复、自动检查更新 |
 | [v1.11.0](#v1-11-0) | 2026-11-10 · 公开发布 | 首次应用内更新与签名更新通道 |
@@ -24,6 +25,33 @@
 | [v1.2.0](#v1-2-0) | 2026-11-07 · 开发记录 | 计划测速、托盘、DNS/NAT/路由诊断 |
 | [v1.1.0](#v1-1-0) | 2026-11-07 · 开发记录 | 系统 ICMP、CLI 与历史详情回放 |
 | [v1.0.0](#v1-0-0) | 2026-11-07 · 开发记录 | 桌面测速、基础诊断、本地历史与监控 |
+
+<a id="v1-14-0"></a>
+
+## v1.14.0 (2026-11-16)
+
+本版重点：让历史检索、诊断编排、设置迁移、监控留证和 CLI 自动化更完整，并补齐桌面端键盘与可访问性路径。
+
+### 新增与改进
+
+- 历史页支持按节点、供应商、测速 URL、接口、公网 IP、ISP 和状态筛选；列表、统计、分页与 CSV/JSON 导出共用同一筛选口径。
+- 诊断页支持一次运行 7 项基础检查，使用最多 3 路并发、逐项进度和失败汇总。
+- 设置支持带格式与 schema 版本的 JSON 备份/恢复；恢复前校验节点、边界和重复项，写入失败沿用原子回滚路径。
+- 监控页支持导出当前 10 秒至 1 小时窗口的原始 CSV/JSON 样本。
+- 监控页补充当前 1 小时窗口的 1m/5m/1h 均值、P50、P95、峰值和样本数摘要；长期 24 小时/7 天持久化仍未完成。
+- CLI JSON 增加实验元数据，新增 `history list/export` 筛选与 CSV/JSON 输出；IPC 契约脚本检查前端调用、Rust 注册和定义是否一致。
+- 诊断页可导出脱敏 JSON/HTML 报告，保留失败原因与未知值并对 HTML 内容转义。
+- 增加 Ctrl/Cmd+1…8 页面快捷键、Ctrl/Cmd+Enter 测速、Escape 取消、跳过导航、主体焦点恢复、动态标题、ARIA 状态和系统 reduced-motion 响应。
+
+### 验证边界
+
+- `npm run typecheck`、`npm test -- --run`、`npm run build`、`npm run ipc:check`、Rust fmt、Clippy 和 Rust 单元测试均通过。
+- 真实网络、Windows 安装器/更新 E2E、屏幕阅读器、高 DPI 和长期运行仍需独立验收。
+
+### 下载与记录
+
+- Windows x64 安装包、`.sig`、`latest.json` 和 `SHA256SUMS.txt` 由标签触发的 GitHub Actions 生成。
+- [本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.13.0...v1.14.0) · [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.0)。
 
 <a id="v1-13-0"></a>
 

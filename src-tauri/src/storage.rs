@@ -110,6 +110,73 @@ fn history_bounds(
     Ok((from, to))
 }
 
+const HISTORY_QUERY_MAX_CHARS: usize = 120;
+
+fn history_query(value: Option<String>) -> Result<Option<String>, String> {
+    let value = value.unwrap_or_default().trim().to_string();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > HISTORY_QUERY_MAX_CHARS {
+        return Err(format!(
+            "历史搜索条件不能超过 {HISTORY_QUERY_MAX_CHARS} 个字符"
+        ));
+    }
+    // LIKE 通配符会改变用户输入的含义；把它们按普通文字处理，避免
+    // 输入一个百分号就扫描整张表并得到令人意外的结果。
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    Ok(Some(format!("%{escaped}%")))
+}
+
+fn history_status(value: Option<String>) -> Result<Option<String>, String> {
+    let value = value.unwrap_or_default().trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if !matches!(value.as_str(), "completed" | "failed" | "cancelled") {
+        return Err("无效历史状态筛选".into());
+    }
+    Ok(Some(value))
+}
+
+fn append_history_filters(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    from: &Option<String>,
+    to: &Option<String>,
+    query: Option<&str>,
+    status: Option<&str>,
+) {
+    if let Some(f) = from {
+        sql.push_str(&format!(" AND created_at >= ?{}", params.len() + 1));
+        params.push(Box::new(f.clone()));
+    }
+    if let Some(t) = to {
+        sql.push_str(&format!(" AND created_at <= ?{}", params.len() + 1));
+        params.push(Box::new(t.clone()));
+    }
+    if let Some(q) = query {
+        let p = params.len() + 1;
+        sql.push_str(&format!(
+            " AND (LOWER(COALESCE(server_name,'')) LIKE LOWER(?{p}) ESCAPE '\\'\
+              OR LOWER(COALESCE(server_provider,'')) LIKE LOWER(?{p}) ESCAPE '\\'\
+              OR LOWER(COALESCE(server_url,'')) LIKE LOWER(?{p}) ESCAPE '\\'\
+              OR LOWER(COALESCE(network_type,'')) LIKE LOWER(?{p}) ESCAPE '\\'\
+              OR LOWER(COALESCE(interface_name,'')) LIKE LOWER(?{p}) ESCAPE '\\'\
+              OR LOWER(COALESCE(public_ip,'')) LIKE LOWER(?{p}) ESCAPE '\\'\
+              OR LOWER(COALESCE(isp,'')) LIKE LOWER(?{p}) ESCAPE '\\')"
+        ));
+        params.push(Box::new(q.to_string()));
+    }
+    if let Some(s) = status {
+        sql.push_str(&format!(" AND status = ?{}", params.len() + 1));
+        params.push(Box::new(s.to_string()));
+    }
+}
+
 /// 诊断历史的列表行(不含完整 detail,避免列表查询搬运大 JSON)
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DiagRunRow {
@@ -310,6 +377,7 @@ impl Storage {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn list_history(
         &self,
         from: Option<String>,
@@ -320,6 +388,19 @@ impl Storage {
         self.list_history_page(from, to, order_desc, limit, None)
     }
 
+    pub fn list_history_filtered(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+        query: Option<String>,
+        status: Option<String>,
+        order_desc: bool,
+        limit: u32,
+    ) -> Result<Vec<HistoryRow>, String> {
+        self.list_history_page_filtered(from, to, query, status, order_desc, limit, None)
+    }
+
+    #[cfg(test)]
     pub fn list_history_page(
         &self,
         from: Option<String>,
@@ -328,7 +409,23 @@ impl Storage {
         limit: u32,
         cursor_id: Option<i64>,
     ) -> Result<Vec<HistoryRow>, String> {
+        self.list_history_page_filtered(from, to, None, None, order_desc, limit, cursor_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_history_page_filtered(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+        query: Option<String>,
+        status: Option<String>,
+        order_desc: bool,
+        limit: u32,
+        cursor_id: Option<i64>,
+    ) -> Result<Vec<HistoryRow>, String> {
         let (from, to) = history_bounds(from, to)?;
+        let query = history_query(query)?;
+        let status = history_status(status)?;
         let conn = crate::safe_lock::lock(&self.conn);
         let mut sql = String::from(
             "SELECT id, created_at, download_mbps, upload_mbps, idle_ping_ms, jitter_ms,
@@ -337,14 +434,14 @@ impl Storage {
              FROM history WHERE 1=1",
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        if let Some(f) = &from {
-            sql.push_str(&format!(" AND created_at >= ?{}", params.len() + 1));
-            params.push(Box::new(f.clone()));
-        }
-        if let Some(t) = &to {
-            sql.push_str(&format!(" AND created_at <= ?{}", params.len() + 1));
-            params.push(Box::new(t.clone()));
-        }
+        append_history_filters(
+            &mut sql,
+            &mut params,
+            &from,
+            &to,
+            query.as_deref(),
+            status.as_deref(),
+        );
         if let Some(cursor_id) = cursor_id {
             let comparator = if order_desc { "<" } else { ">" };
             sql.push_str(&format!(" AND id {comparator} ?{}", params.len() + 1));
@@ -452,36 +549,62 @@ impl Storage {
 
     /// 满足筛选条件的历史条数(与 `list_history` 同一 WHERE 口径)。
     /// 用于前端区分"已加载 M 条"和"库内共 N 条",避免把窗口内统计当成全量。
+    #[cfg(test)]
     pub fn history_count_filtered(
         &self,
         from: Option<String>,
         to: Option<String>,
     ) -> Result<u32, String> {
+        self.history_count_filtered_with_query(from, to, None, None)
+    }
+
+    pub fn history_count_filtered_with_query(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+        query: Option<String>,
+        status: Option<String>,
+    ) -> Result<u32, String> {
         let (from, to) = history_bounds(from, to)?;
+        let query = history_query(query)?;
+        let status = history_status(status)?;
         let conn = crate::safe_lock::lock(&self.conn);
         let mut sql = String::from("SELECT COUNT(*) FROM history WHERE 1=1");
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        if let Some(f) = &from {
-            sql.push_str(&format!(" AND created_at >= ?{}", params.len() + 1));
-            params.push(Box::new(f.clone()));
-        }
-        if let Some(t) = &to {
-            sql.push_str(&format!(" AND created_at <= ?{}", params.len() + 1));
-            params.push(Box::new(t.clone()));
-        }
+        append_history_filters(
+            &mut sql,
+            &mut params,
+            &from,
+            &to,
+            query.as_deref(),
+            status.as_deref(),
+        );
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         conn.query_row(&sql, refs.as_slice(), |r| r.get(0))
             .map_err(|e| e.to_string())
     }
 
+    #[cfg(test)]
     pub fn history_summary(
         &self,
         from: Option<String>,
         to: Option<String>,
     ) -> Result<HistorySummary, String> {
+        self.history_summary_filtered(from, to, None, None)
+    }
+
+    pub fn history_summary_filtered(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+        query: Option<String>,
+        status: Option<String>,
+    ) -> Result<HistorySummary, String> {
         let (from, to) = history_bounds(from, to)?;
+        let query = history_query(query)?;
+        let status = history_status(status)?;
         let conn = crate::safe_lock::lock(&self.conn);
-        conn.query_row(
+        let mut sql = String::from(
             "SELECT COUNT(*),
                 COUNT(CASE WHEN status = 'completed' THEN 1 END),
                 COUNT(CASE WHEN status = 'failed' THEN 1 END),
@@ -490,22 +613,30 @@ impl Storage {
                 AVG(CASE WHEN status = 'completed' THEN upload_mbps END),
                 AVG(CASE WHEN status = 'completed' THEN idle_ping_ms END),
                 MAX(CASE WHEN status = 'completed' THEN download_mbps END)
-             FROM history WHERE (?1 IS NULL OR created_at >= ?1)
-                AND (?2 IS NULL OR created_at <= ?2)",
-            rusqlite::params![from, to],
-            |r| {
-                Ok(HistorySummary {
-                    total: r.get(0)?,
-                    completed: r.get(1)?,
-                    failed: r.get(2)?,
-                    cancelled: r.get(3)?,
-                    avg_download_mbps: r.get(4)?,
-                    avg_upload_mbps: r.get(5)?,
-                    avg_ping_ms: r.get(6)?,
-                    best_download_mbps: r.get(7)?,
-                })
-            },
-        )
+             FROM history WHERE 1=1",
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        append_history_filters(
+            &mut sql,
+            &mut params,
+            &from,
+            &to,
+            query.as_deref(),
+            status.as_deref(),
+        );
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        conn.query_row(&sql, refs.as_slice(), |r| {
+            Ok(HistorySummary {
+                total: r.get(0)?,
+                completed: r.get(1)?,
+                failed: r.get(2)?,
+                cancelled: r.get(3)?,
+                avg_download_mbps: r.get(4)?,
+                avg_upload_mbps: r.get(5)?,
+                avg_ping_ms: r.get(6)?,
+                best_download_mbps: r.get(7)?,
+            })
+        })
         .map_err(|e| e.to_string())
     }
 
@@ -973,6 +1104,75 @@ mod tests {
             .avg_upload_mbps
             .is_none());
     }
+
+    #[test]
+    fn test_history_text_and_status_filters_share_list_count_and_summary() {
+        let s = mem_storage();
+        let mut alpha = sample_result("completed");
+        alpha.server = Some(ServerNodeInfo {
+            name: "Alpha Gateway".into(),
+            provider: "librespeed".into(),
+            base_url: "https://alpha.example".into(),
+            ..Default::default()
+        });
+        alpha.interface_name = "Wi-Fi 6".into();
+        alpha.isp = Some("Example ISP".into());
+        s.insert_result(&alpha).unwrap();
+
+        let mut beta = sample_result("failed");
+        beta.server = Some(ServerNodeInfo {
+            name: "Beta Node".into(),
+            provider: "cloudflare".into(),
+            base_url: "https://beta.example".into(),
+            ..Default::default()
+        });
+        beta.public_ip = Some("192.0.2.10".into());
+        s.insert_result(&beta).unwrap();
+
+        let rows = s
+            .list_history_page_filtered(
+                None,
+                None,
+                Some("wi-fi".into()),
+                Some("completed".into()),
+                true,
+                10,
+                None,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].server_name, "Alpha Gateway");
+
+        let count = s
+            .history_count_filtered_with_query(None, None, Some("EXAMPLE ISP".into()), None)
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let summary = s
+            .history_summary_filtered(None, None, Some("beta".into()), Some("failed".into()))
+            .unwrap();
+        assert_eq!(
+            (summary.total, summary.completed, summary.failed),
+            (1, 0, 1)
+        );
+    }
+
+    #[test]
+    fn test_history_filters_reject_invalid_status_and_oversized_query() {
+        let s = mem_storage();
+        assert!(s
+            .history_count_filtered_with_query(None, None, None, Some("unknown".into()))
+            .is_err());
+        assert!(s
+            .history_count_filtered_with_query(
+                None,
+                None,
+                Some("x".repeat(HISTORY_QUERY_MAX_CHARS + 1)),
+                None,
+            )
+            .is_err());
+    }
+
     #[test]
     fn metrics_selects_latest_success_and_counts_all_statuses() {
         let s = mem_storage();

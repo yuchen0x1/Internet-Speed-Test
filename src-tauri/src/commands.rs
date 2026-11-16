@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::diagnostics;
@@ -73,6 +73,21 @@ pub struct ExportOutcome {
     pub exported: u32,
     pub total: u32,
 }
+
+/// 可迁移的设置备份格式。使用显式格式名和版本号，避免把任意 JSON
+/// 当作设置文件直接覆盖当前配置。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct SettingsBackup {
+    format: String,
+    schema_version: u32,
+    exported_at: String,
+    app_version: String,
+    settings: AppSettings,
+}
+
+const SETTINGS_BACKUP_FORMAT: &str = "netvision-pro-settings";
+const SETTINGS_BACKUP_VERSION: u32 = 1;
+const MAX_IMPORTED_CUSTOM_NODES: usize = 64;
 
 #[tauri::command]
 pub fn get_app_info(state: tauri::State<AppState>) -> AppInfo {
@@ -156,6 +171,148 @@ pub async fn set_settings(
         );
     }
     Ok(s)
+}
+
+fn normalize_imported_settings(mut s: AppSettings) -> Result<AppSettings, String> {
+    // Keep the same bounds as the regular settings command so a hand-edited
+    // backup cannot create an unbounded worker or refresh loop.
+    s.down_concurrency = s.down_concurrency.clamp(1, 16);
+    s.up_concurrency = s.up_concurrency.clamp(1, 8);
+    s.test_duration_secs = s.test_duration_secs.clamp(5, 30);
+    s.anim_intensity = s.anim_intensity.clamp(0.0, 1.5);
+    s.refresh_interval_ms = s.refresh_interval_ms.clamp(200, 5000);
+    s.auto_test_interval_minutes = s.auto_test_interval_minutes.clamp(15, 1440);
+    s.update_check_interval_hours = s.update_check_interval_hours.clamp(6, 168);
+    s.alert_threshold_ms = s.alert_threshold_ms.clamp(50, 1000);
+    s.prometheus_port = s.prometheus_port.clamp(1024, 65535);
+    s.retention_days = match s.retention_days {
+        0 | 30 | 90 | 180 | 365 => s.retention_days,
+        value if value < 30 => 30,
+        value if value < 90 => 90,
+        value if value < 180 => 180,
+        value if value < 365 => 180,
+        _ => 365,
+    };
+    if !["dark", "light", "system"].contains(&s.theme.as_str()) {
+        s.theme = "dark".into();
+    }
+    if !["auto", "manual"].contains(&s.node_mode.as_str()) {
+        s.node_mode = "auto".into();
+    }
+
+    if s.custom_nodes.len() > MAX_IMPORTED_CUSTOM_NODES {
+        return Err(format!(
+            "设置备份包含过多自定义节点(最多 {MAX_IMPORTED_CUSTOM_NODES} 个)"
+        ));
+    }
+    let mut nodes = Vec::with_capacity(s.custom_nodes.len());
+    for mut node in s.custom_nodes {
+        let base = util::validate_server_url(&node.base_url, node.allow_http)?;
+        node.base_url = base.clone();
+        node.name = if node.name.trim().is_empty() {
+            util::extract_host(&base).unwrap_or_else(|| "自定义节点".into())
+        } else {
+            node.name.trim().chars().take(120).collect()
+        };
+        node.provider = "custom".into();
+        node.id = util::node_id(&base, &node.name);
+        node.alive = None;
+        node.latency_ms = None;
+        if nodes.iter().any(|n: &ServerNodeInfo| n.base_url == base) {
+            return Err(format!("设置备份包含重复自定义节点: {base}"));
+        }
+        nodes.push(node);
+    }
+    s.custom_nodes = nodes;
+    if s.node_mode == "manual" {
+        s.default_node_url = crate::settings::validate_manual_node(&s, &s.default_node_url)?;
+    }
+    Ok(s)
+}
+
+async fn apply_settings_snapshot(
+    app: &AppHandle,
+    state: &AppState,
+    s: AppSettings,
+) -> Result<AppSettings, String> {
+    let mut guard = state.settings.settings.write().await;
+    use tauri_plugin_autostart::ManagerExt as _;
+    let autolaunch = app.autolaunch();
+    let previous = if s.autostart != guard.autostart {
+        Some(autolaunch.is_enabled().map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    state
+        .settings
+        .save_with_autostart(&s, previous, |enabled| {
+            if enabled {
+                autolaunch.enable()
+            } else {
+                autolaunch.disable()
+            }
+            .map_err(|e| e.to_string())
+        })
+        .await?;
+    *guard = s.clone();
+    state.monitor.set_enabled(s.monitor_enabled);
+    let storage = state.storage.clone();
+    let connected_getter: Arc<dyn Fn() -> bool + Send + Sync> =
+        Arc::new(|| crate::diagnostics::current_net_status().connected);
+    state.prometheus.apply(
+        s.prometheus_enabled,
+        s.prometheus_port,
+        storage,
+        connected_getter,
+    );
+    Ok(s)
+}
+
+/// 将设置导出为带版本号的 JSON 文件，便于迁移到另一台电脑。
+#[tauri::command]
+pub async fn settings_export(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let settings = state.settings.settings.read().await.clone();
+    let backup = SettingsBackup {
+        format: SETTINGS_BACKUP_FORMAT.into(),
+        schema_version: SETTINGS_BACKUP_VERSION,
+        exported_at: chrono::Local::now().to_rfc3339(),
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        settings,
+    };
+    let content = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
+    let path = save_via_dialog(
+        app,
+        "netvision-settings.json",
+        vec![("JSON 文件", &["json"][..])],
+    )
+    .await?;
+    std::fs::write(&path, content).map_err(|e| format!("写入设置备份失败: {e}"))?;
+    Ok(path)
+}
+
+/// 从用户选择的 JSON 备份恢复设置。解析、校验和原子写入全部在替换当前设置前完成。
+#[tauri::command]
+pub async fn settings_import(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppSettings, String> {
+    let path = open_via_dialog(app.clone(), vec![("JSON 文件", &["json"][..])]).await?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("读取设置备份失败: {e}"))?;
+    let backup: SettingsBackup =
+        serde_json::from_str(&text).map_err(|e| format!("设置备份格式无效: {e}"))?;
+    if backup.format != SETTINGS_BACKUP_FORMAT {
+        return Err("不是 NetVision Pro 设置备份文件".into());
+    }
+    if backup.schema_version != SETTINGS_BACKUP_VERSION {
+        return Err(format!("不支持的设置备份版本: {}", backup.schema_version));
+    }
+    let settings = normalize_imported_settings(backup.settings)?;
+    apply_settings_snapshot(&app, &state, settings).await
 }
 
 #[tauri::command]
@@ -374,19 +531,24 @@ pub fn open_speedtest_service(service: String) -> Result<(), String> {
 // ============================================================
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn history_list(
     state: tauri::State<'_, AppState>,
     from: Option<String>,
     to: Option<String>,
+    query: Option<String>,
+    status: Option<String>,
     desc: Option<bool>,
     limit: Option<u32>,
     cursor_id: Option<i64>,
 ) -> Result<Vec<HistoryRow>, String> {
     let storage = state.storage.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        storage.list_history_page(
+        storage.list_history_page_filtered(
             from,
             to,
+            query,
+            status,
             desc.unwrap_or(true),
             limit.unwrap_or(500),
             cursor_id,
@@ -401,11 +563,15 @@ pub async fn history_count(
     state: tauri::State<'_, AppState>,
     from: Option<String>,
     to: Option<String>,
+    query: Option<String>,
+    status: Option<String>,
 ) -> Result<u32, String> {
     let storage = state.storage.clone();
-    tauri::async_runtime::spawn_blocking(move || storage.history_count_filtered(from, to))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        storage.history_count_filtered_with_query(from, to, query, status)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -424,11 +590,15 @@ pub async fn history_summary(
     state: tauri::State<'_, AppState>,
     from: Option<String>,
     to: Option<String>,
+    query: Option<String>,
+    status: Option<String>,
 ) -> Result<crate::storage::HistorySummary, String> {
     let storage = state.storage.clone();
-    tauri::async_runtime::spawn_blocking(move || storage.history_summary(from, to))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        storage.history_summary_filtered(from, to, query, status)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -449,18 +619,28 @@ pub async fn history_clear(state: tauri::State<'_, AppState>) -> Result<(), Stri
 
 /// 打开系统保存对话框并写出 CSV / JSON;超出 5000 条时如实返回截断情况
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn history_export(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     format: String,
     from: Option<String>,
     to: Option<String>,
+    query: Option<String>,
+    status: Option<String>,
     desc: Option<bool>,
 ) -> Result<ExportOutcome, String> {
     let storage = state.storage.clone();
     let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
-        let rows = storage.list_history(from.clone(), to.clone(), desc.unwrap_or(true), 5000)?;
-        let total = storage.history_count_filtered(from, to)?;
+        let rows = storage.list_history_filtered(
+            from.clone(),
+            to.clone(),
+            query.clone(),
+            status.clone(),
+            desc.unwrap_or(true),
+            5000,
+        )?;
+        let total = storage.history_count_filtered_with_query(from, to, query, status)?;
         Ok::<_, String>((rows, total))
     })
     .await
@@ -549,6 +729,32 @@ async fn save_via_dialog(
     } else {
         path
     };
+    Ok(path.display().to_string())
+}
+
+async fn open_via_dialog(
+    app: AppHandle,
+    filters: Vec<(&'static str, &'static [&'static str])>,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<tauri_plugin_dialog::FilePath>>();
+    let mut builder = app.dialog().file().add_filter(filters[0].0, filters[0].1);
+    for (name, exts) in filters.iter().skip(1) {
+        builder = builder.add_filter(*name, exts);
+    }
+    builder.pick_file(move |file| {
+        let _ = tx.send(file);
+    });
+    let file = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv_timeout(std::time::Duration::from_secs(180))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|_| "打开对话框超时".to_string())?
+    .ok_or_else(|| "已取消导入".to_string())?;
+    let path: PathBuf = file
+        .into_path()
+        .map_err(|e| format!("无效的设置备份路径: {e}"))?;
     Ok(path.display().to_string())
 }
 
@@ -641,6 +847,21 @@ pub fn monitor_history(
     state.monitor.history(window_secs)
 }
 
+/// Return epoch-aligned monitor summaries for the selected window. The
+/// allow-list keeps the UI contract predictable and prevents accidental
+/// per-sample aggregation requests from growing without bound.
+#[tauri::command]
+pub fn monitor_aggregate(
+    state: tauri::State<AppState>,
+    window_secs: u32,
+    bucket_secs: u32,
+) -> Result<Vec<crate::monitor::MonitorBucket>, String> {
+    if !matches!(bucket_secs, 60 | 300 | 3600) {
+        return Err("监控聚合粒度只支持 60、300 或 3600 秒".into());
+    }
+    Ok(state.monitor.aggregate(window_secs, bucket_secs))
+}
+
 #[tauri::command]
 pub fn monitor_latest(state: tauri::State<AppState>) -> Option<crate::monitor::MonitorTick> {
     state.monitor.latest()
@@ -650,6 +871,60 @@ pub fn monitor_latest(state: tauri::State<AppState>) -> Option<crate::monitor::M
 #[tauri::command]
 pub fn monitor_paused(state: tauri::State<AppState>) -> bool {
     state.monitor.is_paused()
+}
+
+/// 将当前监控时间窗保存为 CSV 或 JSON。导出使用原始缓冲样本，窗口和格式均在后端限制。
+#[tauri::command]
+pub async fn monitor_export(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    window_secs: u32,
+    format: String,
+) -> Result<String, String> {
+    let format = format.trim().to_ascii_lowercase();
+    if !matches!(format.as_str(), "csv" | "json") {
+        return Err("不支持的监控导出格式".into());
+    }
+    let ticks = state.monitor.export_history(window_secs);
+    if ticks.is_empty() {
+        return Err("当前时间窗没有可导出的监控数据".into());
+    }
+    let (content, default_name, filters) = if format == "csv" {
+        (
+            monitor_csv(&ticks),
+            format!("netvision_monitor_{}s.csv", window_secs.clamp(10, 3600)),
+            vec![("CSV 文件", &["csv"][..])],
+        )
+    } else {
+        (
+            serde_json::to_string_pretty(&ticks).map_err(|e| e.to_string())?,
+            format!("netvision_monitor_{}s.json", window_secs.clamp(10, 3600)),
+            vec![("JSON 文件", &["json"][..])],
+        )
+    };
+    let path = save_via_dialog(app, &default_name, filters).await?;
+    std::fs::write(&path, content).map_err(|e| format!("写入监控导出失败: {e}"))?;
+    Ok(path)
+}
+
+fn monitor_csv(ticks: &[crate::monitor::MonitorTick]) -> String {
+    let mut out = String::from(
+        "timestamp_ms,rx_bps,tx_bps,rx_total,tx_total,interface_count,interfaces_json\n",
+    );
+    for tick in ticks {
+        let interfaces = serde_json::to_string(&tick.ifaces).unwrap_or_else(|_| "[]".into());
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{}\n",
+            tick.ts_ms,
+            fmt2(tick.rx_bps),
+            fmt2(tick.tx_bps),
+            tick.rx_total,
+            tick.tx_total,
+            tick.ifaces.len(),
+            csv_escape(&interfaces),
+        ));
+    }
+    out
 }
 
 // ============================================================
@@ -1007,6 +1282,123 @@ pub async fn diag_connectivity_grid() -> Result<Vec<diagnostics::ConnectivityEnt
     Ok(diagnostics::connectivity_grid().await)
 }
 
+/// 导出当前诊断页快照。报告来自前端已展示的结果，Rust 端负责统一脱敏、格式化和文件写入。
+/// 结构化网络标识字段会替换为 [已脱敏]，错误/摘要字段保留，便于工单定位失败原因。
+#[tauri::command]
+pub async fn diag_export_report(
+    app: AppHandle,
+    format: String,
+    report: serde_json::Value,
+) -> Result<String, String> {
+    if !report.is_object() {
+        return Err("诊断报告必须是 JSON 对象".into());
+    }
+    let mut sanitized = report;
+    redact_diag_value(&mut sanitized, None);
+    let json =
+        serde_json::to_string_pretty(&sanitized).map_err(|e| format!("生成诊断报告失败: {e}"))?;
+    if json.len() > 2 * 1024 * 1024 {
+        return Err("诊断报告超过 2 MiB，无法导出".into());
+    }
+    let (content, default_name, filters) = match format.as_str() {
+        "json" => (
+            json.clone(),
+            "netvision-diagnostics.json".to_string(),
+            vec![("JSON 文件", &["json"][..])],
+        ),
+        "html" => (
+            render_diag_html(&json),
+            "netvision-diagnostics.html".to_string(),
+            vec![("HTML 文件", &["html"][..])],
+        ),
+        _ => return Err("不支持的诊断报告格式".into()),
+    };
+    let path = save_via_dialog(app, &default_name, filters).await?;
+    std::fs::write(&path, content).map_err(|e| format!("写入诊断报告失败: {e}"))?;
+    Ok(path)
+}
+
+fn redact_diag_value(value: &mut serde_json::Value, key: Option<&str>) {
+    if key.is_some_and(is_sensitive_diag_key) {
+        match value {
+            serde_json::Value::Null => {}
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if !item.is_null() {
+                        *item = serde_json::Value::String("[已脱敏]".into());
+                    }
+                }
+            }
+            _ => {
+                *value = serde_json::Value::String("[已脱敏]".into());
+            }
+        }
+        return;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for (name, child) in map.iter_mut() {
+                redact_diag_value(child, Some(name));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                redact_diag_value(child, None);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_diag_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.ends_with("_host")
+        || key.ends_with("_domain")
+        || key.ends_with("_url")
+        || key.ends_with("_ip")
+        || key.ends_with("_address")
+        || matches!(
+            key.as_str(),
+            "hostname"
+                | "mac"
+                | "bssid"
+                | "ssid"
+                | "ipv4"
+                | "ipv6"
+                | "public_ip"
+                | "public_address"
+                | "mapped_ip"
+                | "gateway"
+                | "dns_servers"
+                | "host"
+                | "target"
+                | "url"
+                | "server"
+                | "domain"
+                | "ip"
+                | "token"
+                | "secret"
+                | "password"
+                | "authorization"
+                | "api_key"
+        )
+}
+
+fn render_diag_html(json: &str) -> String {
+    format!(
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>NetVision Pro 诊断报告</title><style>body{{font-family:Segoe UI,Microsoft YaHei,sans-serif;background:#10141d;color:#e6edf7;margin:32px}}pre{{white-space:pre-wrap;word-break:break-word;background:#171e2b;border:1px solid #2a3950;border-radius:10px;padding:18px;line-height:1.55}}h1{{font-size:22px}}</style></head><body><h1>NetVision Pro 诊断报告</h1><p>结构化网络标识已脱敏；错误和摘要字段保留。</p><pre>{}</pre></body></html>",
+        escape_html(json)
+    )
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 #[tauri::command]
 pub fn pingmon_start(
     app: AppHandle,
@@ -1307,6 +1699,124 @@ mod tests {
         assert!(speedtest_service_url("file:///C:/Windows").is_none());
         assert!(speedtest_service_url("ookla; shutdown").is_none());
     }
+
+    #[test]
+    fn imported_settings_are_bounded_and_custom_nodes_are_rebuilt() {
+        let mut settings = AppSettings {
+            down_concurrency: 99,
+            up_concurrency: 0,
+            test_duration_secs: 1,
+            prometheus_port: 1,
+            theme: "unknown".into(),
+            node_mode: "manual".into(),
+            ..Default::default()
+        };
+        settings.custom_nodes.push(ServerNodeInfo {
+            name: "  ".into(),
+            base_url: "https://example.com/".into(),
+            allow_http: false,
+            ..Default::default()
+        });
+        settings.default_node_url = "https://example.com".into();
+        let normalized = normalize_imported_settings(settings).unwrap();
+        assert_eq!(normalized.down_concurrency, 16);
+        assert_eq!(normalized.up_concurrency, 1);
+        assert_eq!(normalized.test_duration_secs, 5);
+        assert_eq!(normalized.prometheus_port, 1024);
+        assert_eq!(normalized.theme, "dark");
+        assert_eq!(normalized.custom_nodes[0].provider, "custom");
+        assert_eq!(normalized.custom_nodes[0].base_url, "https://example.com");
+        assert_eq!(normalized.default_node_url, "https://example.com");
+    }
+
+    #[test]
+    fn imported_settings_reject_invalid_or_duplicate_nodes() {
+        let mut invalid = AppSettings::default();
+        invalid.custom_nodes.push(ServerNodeInfo {
+            base_url: "file:///unsafe".into(),
+            ..Default::default()
+        });
+        assert!(normalize_imported_settings(invalid).is_err());
+
+        let mut duplicate = AppSettings::default();
+        for _ in 0..2 {
+            duplicate.custom_nodes.push(ServerNodeInfo {
+                base_url: "https://example.com".into(),
+                ..Default::default()
+            });
+        }
+        assert!(normalize_imported_settings(duplicate).is_err());
+    }
+
+    #[test]
+    fn settings_backup_has_explicit_format_and_version() {
+        let backup = SettingsBackup {
+            format: SETTINGS_BACKUP_FORMAT.into(),
+            schema_version: SETTINGS_BACKUP_VERSION,
+            exported_at: "2026-11-16T00:00:00+08:00".into(),
+            app_version: "1.13.0".into(),
+            settings: AppSettings::default(),
+        };
+        let json = serde_json::to_string(&backup).unwrap();
+        let decoded: SettingsBackup = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.format, SETTINGS_BACKUP_FORMAT);
+        assert_eq!(decoded.schema_version, SETTINGS_BACKUP_VERSION);
+    }
+
+    #[test]
+    fn monitor_csv_preserves_tick_and_interface_data() {
+        let ticks = vec![crate::monitor::MonitorTick {
+            ts_ms: 1_700_000_000_000,
+            rx_bps: 1024.5,
+            tx_bps: 256.25,
+            rx_total: 1000,
+            tx_total: 2000,
+            ifaces: vec![crate::monitor::IfaceTick {
+                name: "Ethernet, 1".into(),
+                rx_bps: 1024.5,
+                tx_bps: 256.25,
+                rx_total: 1000,
+                tx_total: 2000,
+                up: true,
+            }],
+        }];
+        let csv = monitor_csv(&ticks);
+        assert!(csv.starts_with("timestamp_ms,rx_bps,tx_bps"));
+        assert!(csv.contains("1700000000000,1024.50,256.25,1000,2000,1,"));
+        assert!(csv.contains("Ethernet, 1"));
+    }
+
+    #[test]
+    fn diagnostic_report_redacts_network_identifiers_but_keeps_errors() {
+        let mut value = serde_json::json!({
+            "hostname": "workstation",
+            "local": { "mac": "00:11:22:33:44:55", "ipv4": ["192.0.2.10"] },
+            "target": "example.test",
+            "route_host": "router.example.test",
+            "dns_domain": "example.test",
+            "gateway": null,
+            "error": "目标超时",
+            "ok": false,
+        });
+        redact_diag_value(&mut value, None);
+        assert_eq!(value["hostname"], "[已脱敏]");
+        assert_eq!(value["local"]["mac"], "[已脱敏]");
+        assert_eq!(value["local"]["ipv4"][0], "[已脱敏]");
+        assert_eq!(value["target"], "[已脱敏]");
+        assert_eq!(value["route_host"], "[已脱敏]");
+        assert_eq!(value["dns_domain"], "[已脱敏]");
+        assert!(value["gateway"].is_null());
+        assert_eq!(value["error"], "目标超时");
+        assert_eq!(value["ok"], false);
+    }
+
+    #[test]
+    fn diagnostic_html_escapes_json() {
+        let html = render_diag_html("{\"error\":\"<timeout>&\"}");
+        assert!(html.contains("&lt;timeout&gt;&amp;"));
+        assert!(!html.contains("<timeout>"));
+    }
+
     #[test]
     fn batch_export_preserves_partial_and_unmeasured_targets() {
         let snapshot = crate::batchtest::BatchSnapshot {

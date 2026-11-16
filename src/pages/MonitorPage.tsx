@@ -2,12 +2,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, onPingMonTick } from "../api";
 import { useApp } from "../store/app";
-import { fmtBytes, fmtBytesPerSec } from "../lib/format";
+import { fmtBytes, fmtBytesPerSec, isCancelError } from "../lib/format";
 import { useMonitor } from "../store/app";
 import { LineChart, type Series } from "../components/LineChart";
 import { ActivityBars } from "../components/ActivityBars";
 import { PingDots, pingStats, type PingSample } from "../components/PingDots";
 import { Icon } from "../components/Icon";
+import type { MonitorBucket } from "../types";
 
 const WINDOWS = [
   { value: 60, label: "1 分钟" },
@@ -27,6 +28,8 @@ export function MonitorPage() {
   const [pingRunning, setPingRunning] = useState(false);
   const [pingBusy, setPingBusy] = useState(false);
   const [pingReady, setPingReady] = useState(false);
+  const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+  const [buckets, setBuckets] = useState<MonitorBucket[]>([]);
   const pingRef = useRef<PingSample[]>([]);
 
   useEffect(() => {
@@ -82,6 +85,25 @@ export function MonitorPage() {
     backfill(win);
   }, [win, backfill]);
 
+  // 聚合只在后端按时间桶计算,避免前端每次重绘都重新排序原始样本。
+  useEffect(() => {
+    let alive = true;
+    const bucketSecs = win >= 3600 ? 300 : 60;
+    const refresh = () => {
+      api.monitorAggregate(win, bucketSecs).then((rows) => {
+        if (alive) setBuckets(rows);
+      }).catch(() => {
+        if (alive) setBuckets([]);
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [win]);
+
   const series: Series[] = useMemo(() => {
     const cutoff = Date.now() - win * 1000;
     const data = buffer.filter((t) => t.ts_ms >= cutoff);
@@ -94,11 +116,36 @@ export function MonitorPage() {
   }, [buffer, win]);
 
   const topIfaces = latest?.ifaces.slice(0, 6) ?? [];
+  const aggregateSummary = useMemo(() => {
+    if (!buckets.length) return null;
+    const rxAvg = buckets.reduce((sum, b) => sum + b.rx_avg_bps, 0) / buckets.length;
+    const txAvg = buckets.reduce((sum, b) => sum + b.tx_avg_bps, 0) / buckets.length;
+    return {
+      rxAvg,
+      txAvg,
+      rxP95: Math.max(...buckets.map((b) => b.rx_p95_bps)),
+      txP95: Math.max(...buckets.map((b) => b.tx_p95_bps)),
+      samples: buckets.reduce((sum, b) => sum + b.sample_count, 0),
+    };
+  }, [buckets]);
 
   const toggleMonitor = async (on: boolean) => {
     const saved = await updateSettings({ monitor_enabled: on });
     if (!saved) return;
     toast("info", on ? "后台监控已开启" : "后台监控已关闭(不再采样,零开销)");
+  };
+
+  const exportMonitor = async (format: "csv" | "json") => {
+    if (exporting) return;
+    setExporting(format);
+    try {
+      const path = await api.monitorExport(win, format);
+      toast("success", `监控数据已导出：${path}`);
+    } catch (e) {
+      if (!isCancelError(e)) toast("error", `监控导出失败：${String(e)}`);
+    } finally {
+      setExporting(null);
+    }
   };
 
   return (
@@ -161,11 +208,28 @@ export function MonitorPage() {
               </button>
             ))}
           </div>
+          <div className="row gap4">
+            <button className="btn ghost sm" onClick={() => exportMonitor("csv")} disabled={!!exporting || !buffer.length}>
+              {exporting === "csv" ? "导出中…" : "CSV"}
+            </button>
+            <button className="btn ghost sm" onClick={() => exportMonitor("json")} disabled={!!exporting || !buffer.length}>
+              {exporting === "json" ? "导出中…" : "JSON"}
+            </button>
+          </div>
         </div>
         <LineChart series={series} yUnit="Mbps" height={230} windowSecs={win} avgLine emptyText={paused ? "已暂停 —— 点击恢复继续记录" : "正在采集数据…"} />
         <div className="faint mt8" style={{ fontSize: 11.5 }}>
           纵轴为折算带宽(Mbps)。速率由网卡字节计数在 1s 间隔上的差分得出,是整机真实流量。
         </div>
+        {aggregateSummary && (
+          <div className="row gap8 wrap mt8" style={{ fontSize: 12 }}>
+            <span className="chip cyan">聚合均值 ↓ {fmtBytesPerSec(aggregateSummary.rxAvg)}</span>
+            <span className="chip">聚合均值 ↑ {fmtBytesPerSec(aggregateSummary.txAvg)}</span>
+            <span className="chip">P95 峰值 ↓ {fmtBytesPerSec(aggregateSummary.rxP95)}</span>
+            <span className="chip">P95 峰值 ↑ {fmtBytesPerSec(aggregateSummary.txP95)}</span>
+            <span className="chip">{aggregateSummary.samples} 个原始样本</span>
+          </div>
+        )}
       </div>
 
       {/* 连续 Ping 监测(gping 式) */}

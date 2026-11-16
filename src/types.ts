@@ -109,6 +109,8 @@ export interface HistorySummary {
   best_download_mbps: number | null;
 }
 
+export type HistoryStatus = "completed" | "failed" | "cancelled";
+
 /** 历史导出结果:超出 5000 条上限时 exported < total */
 export interface ExportOutcome {
   path: string;
@@ -150,6 +152,20 @@ export interface MonitorTick {
   rx_total: number;
   tx_total: number;
   ifaces: IfaceTick[];
+}
+
+export interface MonitorBucket {
+  start_ts_ms: number;
+  end_ts_ms: number;
+  sample_count: number;
+  rx_avg_bps: number;
+  rx_p50_bps: number;
+  rx_p95_bps: number;
+  rx_peak_bps: number;
+  tx_avg_bps: number;
+  tx_p50_bps: number;
+  tx_p95_bps: number;
+  tx_peak_bps: number;
 }
 
 export interface NetStatus {

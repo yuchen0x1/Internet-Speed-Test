@@ -42,7 +42,7 @@ export function TitleBar() {
   const traffic = settings?.show_traffic && net.connected ? tick : null;
 
   return (
-    <header className="titlebar" data-tauri-drag-region>
+    <header className="titlebar" data-tauri-drag-region role="banner" aria-label="窗口标题栏">
       <div className="brand" data-tauri-drag-region>
         <div className="brand-logo">
           <Icon name="gauge" size={17} />
@@ -50,7 +50,7 @@ export function TitleBar() {
         <span className="brand-name">NetVision Pro</span>
       </div>
 
-      <div className={`net-chip ${net.connected ? "up" : "down"}`}>
+      <div className={`net-chip ${net.connected ? "up" : "down"}`} role="status" aria-live="polite">
         <span className="dot" />
         <Icon name={kindIcon} size={14} />
         <span>
