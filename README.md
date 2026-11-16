@@ -19,6 +19,7 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 - 诊断页支持脱敏 JSON/HTML 报告；CI 增加前端 invoke、Rust 注册与命令定义的 IPC 契约检查。
 - 补充 Ctrl/Cmd+1…8 页面快捷键、测速快捷键、跳过导航、主体焦点恢复、页面标题、ARIA 状态语义和系统 reduced-motion 响应。
 - 项目审计、15 个开源项目对标、42 项升级路线图和本轮交付边界见 [升级报告](UPGRADE_REPORT.md)。
+- GitHub Actions、公开资产、更新清单和 SHA-256 核对见 [v1.14.0 发布验证](docs/releases/verification-v1.14.0.md)。
 
 > 本版已发布 Windows x64 安装包；安装器/更新 E2E、屏幕阅读器、高 DPI 和长期运行仍需独立验收。
 

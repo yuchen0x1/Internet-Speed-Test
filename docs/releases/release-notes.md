@@ -28,6 +28,8 @@
 
 ## v1.14.0 (2026-11-16)
 
+正式发布：**2026-11-16 22:57:48（北京时间）**。源码提交：[af55e44](https://github.com/yuchen0x1/Internet-Speed-Test/commit/af55e44aa9edf738fdb02109a5addf4192131e48)。仅提供 **Windows 10/11 x64 电脑版**。
+
 本版重点：让历史检索、诊断编排、设置迁移、监控留证和 CLI 自动化更完整，并补齐桌面端键盘与可访问性路径。
 
 ### 新增与改进
@@ -48,8 +50,9 @@
 
 ### 下载与记录
 
-- Windows x64 安装包、`.sig`、`latest.json` 和 `SHA256SUMS.txt` 由标签触发的 GitHub Actions 生成。
-- [本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.13.0...v1.14.0) · [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.0)。
+- [Windows x64 安装包](https://github.com/yuchen0x1/Internet-Speed-Test/releases/download/v1.14.0/NetVision.Pro_1.14.0_x64-setup.exe)。
+- 安装包 SHA-256：`f4efe7fd117babf999b2dba7037a77d0b44382f35742fb59165c725151c32c77`。Release 同时提供 `.sig`、`latest.json` 和 `SHA256SUMS.txt`。
+- [本版提交差异](https://github.com/yuchen0x1/Internet-Speed-Test/compare/v1.13.0...v1.14.0) · [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.0) · [发布验证](verification-v1.14.0.md)。
 
 <a id="v1-13-0"></a>
 
