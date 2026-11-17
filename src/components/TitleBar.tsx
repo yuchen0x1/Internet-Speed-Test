@@ -7,8 +7,10 @@ import { onMonitorTick } from "../api";
 import { ActivityBars } from "./ActivityBars";
 import { Icon } from "./Icon";
 import type { MonitorTick } from "../types";
+import { useI18n } from "../i18n";
 
 export function TitleBar() {
+  const { t, locale } = useI18n();
   const net = useApp((s) => s.net);
   const settings = useApp((s) => s.settings);
   const cur = getCurrentWindow();
@@ -37,12 +39,12 @@ export function TitleBar() {
 
   const kindIcon = net.kind === "wifi" ? "wifi" : net.kind === "ethernet" ? "ethernet" : "globe";
   const kindText =
-    net.kind === "wifi" ? "Wi-Fi" : net.kind === "ethernet" ? "以太网" : net.kind === "cellular" ? "移动网络" : "无连接";
+    net.kind === "wifi" ? "Wi-Fi" : net.kind === "ethernet" ? (locale === "zh-CN" ? "以太网" : "Ethernet") : net.kind === "cellular" ? (locale === "zh-CN" ? "移动网络" : "Mobile") : t("offline");
   const link = net.link_mbps ? `${net.link_mbps >= 1000 ? (net.link_mbps / 1000).toFixed(1) + " Gbps" : net.link_mbps + " Mbps"}` : null;
   const traffic = settings?.show_traffic && net.connected ? tick : null;
 
   return (
-    <header className="titlebar" data-tauri-drag-region role="banner" aria-label="窗口标题栏">
+    <header className="titlebar" data-tauri-drag-region role="banner" aria-label={t("windowTitle")}>
       <div className="brand" data-tauri-drag-region>
         <div className="brand-logo">
           <Icon name="gauge" size={17} />
@@ -61,7 +63,7 @@ export function TitleBar() {
               {link ? ` · ${link}` : ""}
             </>
           ) : (
-            "网络未连接"
+            t("offline")
           )}
         </span>
       </div>

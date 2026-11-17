@@ -9,6 +9,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Toasts } from "./components/ui";
 import { Icon } from "./components/Icon";
 import { ErrorBoundary, installGlobalErrorHandlers } from "./components/ErrorBoundary";
+import { useI18n } from "./i18n";
 import { SpeedTestPage } from "./pages/SpeedTestPage";
 // 首屏是测速页,保持同步加载;其余页面按需加载以降低首屏包体积
 const QualityPage = lazy(() => import("./pages/QualityPage").then((m) => ({ default: m.QualityPage })));
@@ -20,6 +21,7 @@ const MonitorPage = lazy(() => import("./pages/MonitorPage").then((m) => ({ defa
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 
 export default function App() {
+  const { t } = useI18n();
   // 逐字段订阅:toast/网络状态等变化不再触发 App 及整棵页面树重渲染
   const booted = useApp((s) => s.booted);
   const page = useApp((s) => s.page);
@@ -86,16 +88,7 @@ export default function App() {
   // 页面切换后把焦点放回内容区，避免键盘用户继续操作已卸载页面的控件。
   useEffect(() => {
     if (!booted) return;
-    const title = {
-      speedtest: "网络测速",
-      quality: "网络质量",
-      diagnostics: "网络诊断",
-      history: "测速历史",
-      servers: "测速节点",
-      batchtest: "批量拨测",
-      monitor: "网络监控",
-      settings: "设置与关于",
-    }[page];
+    const title = t(page);
     document.title = title ? `${title} · NetVision Pro` : "NetVision Pro";
     const focus = window.setTimeout(() => mainRef.current?.focus(), 0);
     return () => window.clearTimeout(focus);
@@ -155,14 +148,14 @@ export default function App() {
 
   return (
     <>
-      <a className="skip-link" href="#main-content">跳到主要内容</a>
+      <a className="skip-link" href="#main-content">{t("skip")}</a>
       {splash && (
         <div className={`splash ${!booted ? "waiting" : "leaving"}`}>
           <div className="splash-logo">
             <Icon name="gauge" size={44} />
           </div>
           <div className="splash-name">NetVision Pro</div>
-          <div className="splash-sub">专业网络测速与诊断</div>
+          <div className="splash-sub">{t("splash")}</div>
           <div className="splash-bar"><div /></div>
         </div>
       )}
@@ -176,7 +169,7 @@ export default function App() {
             ref={mainRef}
             key={page}
             tabIndex={-1}
-            aria-label="主要内容"
+            aria-label={t("appContent")}
           >
             <div className="page-enter">
               {/* 单页渲染失败只影响该页,不卸载整个应用;切页后自动复位 */}

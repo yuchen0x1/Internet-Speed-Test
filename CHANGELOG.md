@@ -8,6 +8,11 @@
 
 本文件由 [完整更新日志](docs/releases/release-notes.md) 自动同步；请修改该维护入口后运行 `npm run docs:sync`。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
 
+## Unreleased · 2026-11-17
+
+- 应用壳层支持按浏览器/系统语言自动选择中文或 English，并在设置页提供手动选择和本地持久化。
+- 页面标题、导航、错误恢复提示和窗口设置入口随语言即时更新；测速结果、节点名称和协议数据保持原样。
+
 | 版本 | 日期与状态 | 主要变化 |
 | --- | --- | --- |
 | [v1.14.0](#v1-14-0) | 2026-11-16 · 本次发布 | 历史筛选、诊断编排/报告、设置备份、监控聚合/导出、CLI 与 IPC 契约、键盘与可访问性 |

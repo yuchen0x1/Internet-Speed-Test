@@ -7,8 +7,10 @@ import { fmtBytes, isCancelError } from "../lib/format";
 import { ConfirmModal, Segmented } from "../components/ui";
 import { Icon } from "../components/Icon";
 import type { PrometheusStatus, UpdaterInfo } from "../types";
+import { useI18n, type LocaleSetting } from "../i18n";
 
 export function SettingsPage() {
+  const { setting: localeSetting, setSetting: setLocaleSetting, t } = useI18n();
   const toast = useApp((s) => s.toast);
   // 逐字段订阅:toast/网络状态等无关变化不触发整页重渲染
   const settings = useApp((s) => s.settings);
@@ -146,6 +148,20 @@ export function SettingsPage() {
       </div>
 
       <div className="settings-grid">
+        <section className="card pad">
+          <div className="chart-title"><Icon name="globe" size={15} /> {t("language")}</div>
+          <div className="set-row">
+            <div>
+              <div className="label">{t("language")}</div>
+              <div className="desc">{t("languageHint")}</div>
+            </div>
+            <select className="select" value={localeSetting} onChange={(e) => setLocaleSetting(e.target.value as LocaleSetting)}>
+              <option value="auto">{t("auto")}</option>
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English</option>
+            </select>
+          </div>
+        </section>
         {/* 外观 */}
         <section className="card pad">
           <div className="chart-title"><Icon name="eye" size={15} /> 外观</div>
