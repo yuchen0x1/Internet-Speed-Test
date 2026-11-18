@@ -10,25 +10,17 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 ## 最新更新
 
-### v1.14.1 · 2026-11-17
+<!-- github-release:start -->
 
-- 应用壳层支持按浏览器或系统语言自动选择中文/English；设置页可手动切换并保存。
-- 页面标题、导航、网络状态和错误恢复提示会即时更新，测速结果与节点数据保持原样。
+**[v1.14.1](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.1)** · 2026-11-17
 
-### v1.14.0 · 2026-11-16
+v1.14.1 是相对 v1.14.0 的界面本地化维护版本。本次为 Tauri 桌面应用壳层加入浏览器/系统语言自动选择、中文/English 手动切换与本地持久化；测速引擎、诊断、历史和监控的核心业务数据保持原样。
 
-- 历史页新增按节点、供应商、接口、IP、ISP 和状态筛选，列表、统计、分页和导出使用同一筛选口径。
-- 诊断页新增有界并发的基础检查流程，显示逐项进度和失败汇总。
-- 设置页支持带 schema 版本的 JSON 备份/恢复，监控页支持当前时间窗 CSV/JSON 导出。
-- 监控页补充当前窗口的时间桶均值/P50/P95/峰值摘要；CLI JSON 增加实验元数据，并新增历史查询/导出命令。
-- 诊断页支持脱敏 JSON/HTML 报告；CI 增加前端 invoke、Rust 注册与命令定义的 IPC 契约检查。
-- 补充 Ctrl/Cmd+1…8 页面快捷键、测速快捷键、跳过导航、主体焦点恢复、页面标题、ARIA 状态语义和系统 reduced-motion 响应。
-- 项目审计、15 个开源项目对标、42 项升级路线图和本轮交付边界见 [升级报告](UPGRADE_REPORT.md)。
-- GitHub Actions、公开资产、更新清单和 SHA-256 核对见 [v1.14.0 发布验证](docs/releases/verification-v1.14.0.md)。
+[全部发行记录](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
-> 本版已发布 Windows x64 安装包；安装器/更新 E2E、屏幕阅读器、高 DPI 和长期运行仍需独立验收。
+<!-- github-release:end -->
 
-当前公开稳定版为 [v1.14.0](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.0)。完整版本历史、升级方式与早期开发记录见 [发布说明](docs/releases/release-notes.md)。
+[完整更新日志](docs/releases/release-notes.md)
 
 ## 界面预览
 
