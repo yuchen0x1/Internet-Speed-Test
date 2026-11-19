@@ -12,9 +12,9 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 <!-- github-release:start -->
 
-**[v1.14.1](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.14.1)** · 2026-11-17
+**[v1.15.0](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.0)** · 2026-11-19
 
-v1.14.1 是相对 v1.14.0 的界面本地化维护版本。本次为 Tauri 桌面应用壳层加入浏览器/系统语言自动选择、中文/English 手动切换与本地持久化；测速引擎、诊断、历史和监控的核心业务数据保持原样。
+新增 CLI 打包与冒烟脚本（package-cli / smoke-cli），Rust 侧提供 netvision-cli 独立入口。
 
 [全部发行记录](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
