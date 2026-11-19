@@ -6,10 +6,12 @@
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
 
-## Unreleased · 2026-11-17
+## v1.15.0 (2026-11-20)
 
+- 新增 CLI 打包与冒烟脚本（package-cli / smoke-cli），Rust 侧提供 netvision-cli 独立入口。
+- 诊断引擎改进：Cloudflare 与 LibreSpeed 引擎、质量探测与存储层更新。
+- CI 增加 headless 工作流与依赖审计、版本检查脚本；新增 SECURITY.md 与平台说明。
 - 应用壳层支持按浏览器/系统语言自动选择中文或 English，并在设置页提供手动选择和本地持久化。
-- 页面标题、导航、错误恢复提示和窗口设置入口随语言即时更新；测速结果、节点名称和协议数据保持原样。
 
 <a id="v1-14-1"></a>
 

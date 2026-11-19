@@ -4,7 +4,7 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.8.0`～`v1.14.0` 为已有或本次发布的 GitHub Releases；`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。一般使用请下载 [最新稳定版](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest)。
+`v1.15.0` 及之前为已有或本次发布的 GitHub Releases；`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。一般使用请下载 [最新稳定版](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest)。
 
 本文件由 [完整更新日志](docs/releases/release-notes.md) 自动同步；请修改该维护入口后运行 `npm run docs:sync`。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
 
@@ -12,6 +12,15 @@
 
 - 应用壳层支持按浏览器/系统语言自动选择中文或 English，并在设置页提供手动选择和本地持久化。
 - 页面标题、导航、错误恢复提示和窗口设置入口随语言即时更新；测速结果、节点名称和协议数据保持原样。
+
+<a id="v1-15-0"></a>
+
+## v1.15.0 (2026-11-20)
+
+- 新增 CLI 打包与冒烟脚本（package-cli / smoke-cli），Rust 侧提供 netvision-cli 独立入口。
+- 诊断引擎改进：Cloudflare 与 LibreSpeed 引擎、质量探测与存储层更新。
+- CI 增加 headless 工作流与依赖审计、版本检查脚本；新增 SECURITY.md 与平台说明。
+- 应用壳层支持按浏览器/系统语言自动选择中文或 English，并在设置页提供手动选择和本地持久化。
 
 <a id="v1-14-1"></a>
 
