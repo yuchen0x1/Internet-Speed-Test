@@ -75,13 +75,14 @@ export function SettingsPage() {
   };
 
   const installUpdate = async () => {
+    if (!update || updState !== "idle") return;
     setUpdState("downloading");
     setDownPct(0);
     setDownBytes({ downloaded: 0, total: null });
     setUpdMessage(null);
     try {
       // 安装成功时应用会被更新器重启,命令不会正常返回;返回即代表失败
-      await api.updaterInstall();
+      await api.updaterInstall(update.version);
       setUpdState("idle");
     } catch (e) {
       setUpdMessage(`更新失败:${errMsg(e)}`);
@@ -450,7 +451,7 @@ export function SettingsPage() {
           <div className="set-row">
             <div>
               <div className="label">保存诊断数据</div>
-              <div className="desc">诊断结果仅在本机会话内展示,不上传任何服务器</div>
+              <div className="desc">开启后把诊断结果保存到本机历史数据库，按历史保留策略清理</div>
             </div>
             <button className={`toggle ${settings.save_diag_history ? "on" : ""}`} onClick={() => upd({ save_diag_history: !settings.save_diag_history })} aria-label="保存诊断" />
           </div>

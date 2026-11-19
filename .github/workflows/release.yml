@@ -8,33 +8,61 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  cli:
+    uses: ./.github/workflows/headless.yml
+    secrets: inherit
   build:
+    needs: cli
     runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22.22.2
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@263313d2989f864a2b8613f97277288638e7d8f8 # 1.99.1
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: src-tauri
 
       - name: 安装前端依赖
         run: npm ci --registry=https://registry.npmjs.org
+
+      - name: Release quality gates
+        run: |
+          npm run version:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run docs:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run ipc:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run security:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: cli-*
+          path: release-artifacts
+          merge-multiple: true
 
       - name: 校验版本号与标签
         if: startsWith(github.ref, 'refs/tags/v')
@@ -87,6 +115,7 @@ jobs:
           cp "$SRC" "release-artifacts/NetVision.Pro_${VERSION}_x64-setup.exe"
           cp "${SRC}.sig" "release-artifacts/NetVision.Pro_${VERSION}_x64-setup.exe.sig"
           ( cd release-artifacts && sha256sum "NetVision.Pro_${VERSION}_x64-setup.exe" > SHA256SUMS.txt )
+          cat release-artifacts/*.sha256 >> release-artifacts/SHA256SUMS.txt
           node -e '
             const fs = require("fs");
             const version = require("./src-tauri/tauri.conf.json").version;

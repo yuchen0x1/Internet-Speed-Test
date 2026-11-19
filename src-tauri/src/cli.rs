@@ -204,9 +204,30 @@ where
 }
 
 fn data_dir() -> PathBuf {
-    std::env::var("APPDATA")
-        .map(|p| PathBuf::from(p).join("com.netvisionpro.app"))
-        .unwrap_or_else(|_| std::env::temp_dir().join("netvision-pro-cli"))
+    if let Some(dir) = std::env::var_os("NETVISION_DATA_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    #[cfg(windows)]
+    if let Some(base) = std::env::var_os("APPDATA") {
+        return PathBuf::from(base).join("com.netvisionpro.app");
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join("Library/Application Support/com.netvisionpro.app");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(base) =
+            std::env::var_os("XDG_DATA_HOME").filter(|p| PathBuf::from(p).is_absolute())
+        {
+            return PathBuf::from(base).join("com.netvisionpro.app");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".local/share/com.netvisionpro.app");
+        }
+    }
+    // No shared temporary directory: fail visibly when no persistent home exists.
+    PathBuf::from(".netvision-pro")
 }
 
 async fn cli_main(flags: CliFlags) -> i32 {

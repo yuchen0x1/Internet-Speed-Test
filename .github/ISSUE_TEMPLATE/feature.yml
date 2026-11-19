@@ -1,0 +1,11 @@
+name: 功能建议
+description: 说明用户场景、平台及维护价值
+body:
+  - type: textarea
+    id: need
+    attributes: { label: 需要解决的问题与当前做法 }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: 建议行为、适用平台与参考资料 }
+    validations: { required: true }

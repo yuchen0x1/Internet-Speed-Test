@@ -1,0 +1,23 @@
+name: Maintenance evidence
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 3 1 * *'
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 22.22.2 }
+      - run: node scripts/research-ecosystem.mjs
+        env: { GH_TOKEN: '${{ github.token }}' }
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ecosystem-evidence
+          path: docs/research/ecosystem-snapshot.json
+          retention-days: 90

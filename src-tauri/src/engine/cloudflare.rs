@@ -55,6 +55,12 @@ impl CloudflareAdapter {
     }
 }
 
+impl Default for CloudflareAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub const CLOUDFLARE_BASE: &str = "https://speed.cloudflare.com";
 
 /// 构造 Cloudflare 内置节点

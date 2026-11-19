@@ -513,6 +513,7 @@ impl Storage {
 
     /// One connection lock keeps counts and the latest successful result consistent.
     #[cfg(test)]
+    #[cfg(feature = "desktop")]
     pub(crate) fn invalidate_metrics_storage_for_test(&self) {
         crate::safe_lock::lock(&self.conn)
             .execute("DROP TABLE history", [])

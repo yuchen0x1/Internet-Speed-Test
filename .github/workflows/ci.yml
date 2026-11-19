@@ -10,21 +10,22 @@ permissions:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22.22.2
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@263313d2989f864a2b8613f97277288638e7d8f8 # 1.99.1
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: src-tauri
 
@@ -34,14 +35,17 @@ jobs:
       - name: 检查版本日志同步
         run: npm run docs:check
 
+      - name: 统一版本检查
+        run: npm run version:check
+
       - name: 检查 IPC 契约
         run: npm run ipc:check
 
       - name: 前端依赖审计
-        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+        run: npm run security:check
 
       - name: Rust 依赖审计
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-audit
 

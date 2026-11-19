@@ -1585,7 +1585,8 @@ pub async fn updater_check(app: AppHandle) -> Result<Option<UpdaterInfo>, String
 /// 下载并安装更新:进度经 updater://progress 事件回传,完成后重启应用。
 /// (Windows NSIS 以 passive 模式安装,进程由安装器接管)
 #[tauri::command]
-pub async fn updater_install(app: AppHandle) -> Result<(), String> {
+pub async fn updater_install(app: AppHandle, expected_version: String) -> Result<(), String> {
+    let _guard = UpdateInstallGuard::acquire()?;
     use tauri_plugin_updater::UpdaterExt as _;
     let updater = app
         .updater_builder()
@@ -1598,6 +1599,7 @@ pub async fn updater_install(app: AppHandle) -> Result<(), String> {
     let Some(update) = update else {
         return Err("当前已是最新版本,无需安装".into());
     };
+    validate_update_selection(&expected_version, &update.version)?;
 
     let progress_app = app.clone();
     let mut downloaded: u64 = 0;
@@ -1621,9 +1623,47 @@ pub async fn updater_install(app: AppHandle) -> Result<(), String> {
 
 use tauri::Emitter as _;
 
+static UPDATE_INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+struct UpdateInstallGuard;
+impl UpdateInstallGuard {
+    fn acquire() -> Result<Self, String> {
+        UPDATE_INSTALLING
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .map(|_| Self)
+            .map_err(|_| "更新安装已在进行中".into())
+    }
+}
+impl Drop for UpdateInstallGuard {
+    fn drop(&mut self) {
+        UPDATE_INSTALLING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+fn validate_update_selection(expected: &str, actual: &str) -> Result<(), String> {
+    if expected.is_empty() || expected != actual {
+        return Err("可用版本已变化，请重新检查更新并确认版本".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_requires_reviewed_version_and_serializes_installation() {
+        assert!(validate_update_selection("1.15.0", "1.15.1").is_err());
+        assert!(validate_update_selection("", "1.15.0").is_err());
+        assert!(validate_update_selection("1.15.0", "1.15.0").is_ok());
+        let guard = UpdateInstallGuard::acquire().unwrap();
+        assert!(UpdateInstallGuard::acquire().is_err());
+        drop(guard);
+        assert!(UpdateInstallGuard::acquire().is_ok());
+    }
 
     #[test]
     fn test_csv_escape() {

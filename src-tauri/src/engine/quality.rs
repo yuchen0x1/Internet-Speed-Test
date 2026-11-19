@@ -18,11 +18,8 @@ static PING_TIME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[<=](\d+(?:\.\d+)?)\s*ms").unwrap());
 static AVG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:平均|Average)\s*=\s*(\d+(?:\.\d+)?)\s*ms").unwrap());
-static IPV4_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b").unwrap());
-static IPV6_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f:]{1,4}\b").unwrap());
-static TRACE_TIME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(<)?\s*(\d+)\s*ms").unwrap());
+static TRACE_TIME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(<)?\s*(\d+(?:\.\d+)?)\s*ms").unwrap());
 
 /// 计算延迟抖动(RFC 3550 风格:相邻样本差的绝对值均值)
 pub fn jitter_ms(samples: &[f64]) -> f64 {
@@ -101,8 +98,6 @@ pub struct TraceHop {
 }
 
 pub fn parse_traceroute_output(stdout: &str) -> Vec<TraceHop> {
-    let ipv4_re = &*IPV4_RE;
-    let ipv6_re = &*IPV6_RE;
     let time_re = &*TRACE_TIME_RE;
     let mut hops: Vec<TraceHop> = Vec::new();
     for line in stdout.lines() {
@@ -117,10 +112,12 @@ pub fn parse_traceroute_output(stdout: &str) -> Vec<TraceHop> {
         if hop_num == 0 || hop_num > 64 || rest.is_empty() {
             continue;
         }
-        let ip = ipv4_re
-            .captures(rest)
-            .map(|c| c[1].to_string())
-            .or_else(|| ipv6_re.captures(rest).map(|c| c[0].to_string()));
+        let ip = rest.split_whitespace().find_map(|word| {
+            word.trim_matches(['[', ']', '(', ')'])
+                .parse::<std::net::IpAddr>()
+                .ok()
+                .map(|ip| ip.to_string())
+        });
         let times_ms: Vec<f64> = time_re
             .captures_iter(rest)
             .map(|c| c[2].parse::<f64>().unwrap_or(0.0))
@@ -343,6 +340,17 @@ pub fn analyze_quality(r: &TestResult) -> QualityAssessment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_ping_and_trace_preserve_fractional_rtt_and_compressed_ipv6() {
+        let ping = parse_ping_output("64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time=0.031 ms\n2 packets transmitted, 1 received, 50% packet loss\n");
+        assert_eq!(ping.loss_percent, Some(50.0));
+        assert_eq!(ping.rtts_ms, vec![0.031]);
+        let hops = parse_traceroute_output(" 1  ::1  0.031 ms  0.022 ms  0.019 ms\n 2 * * *\n");
+        assert_eq!(hops[0].ip.as_deref(), Some("::1"));
+        assert_eq!(hops[0].times_ms, vec![0.031, 0.022, 0.019]);
+        assert!(hops[1].timeout);
+    }
 
     #[test]
     fn test_jitter() {

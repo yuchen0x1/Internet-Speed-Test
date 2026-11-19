@@ -138,7 +138,7 @@ export const api = {
     invoke<string>("monitor_export", { windowSecs, format }),
   prometheusStatus: () => invoke<PrometheusStatus>("prometheus_status"),
   updaterCheck: () => invoke<UpdaterInfo | null>("updater_check"),
-  updaterInstall: () => invoke<void>("updater_install"),
+  updaterInstall: (expectedVersion: string) => invoke<void>("updater_install", { expectedVersion }),
 
   diagLocal: () => invoke<LocalNetInfo>("diag_local_network"),
   diagHistoryList: (opts?: { kind?: string; limit?: number }) =>

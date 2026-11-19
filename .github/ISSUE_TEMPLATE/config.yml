@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密安全漏洞报告
+    url: https://github.com/yuchen0x1/Internet-Speed-Test/security/advisories/new
+    about: 请勿在公开 Issue 中披露凭据或可利用漏洞细节

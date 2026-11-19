@@ -1,0 +1,21 @@
+name: Bug / 平台与更新问题
+description: 报告可复现的功能、平台兼容性或更新故障
+body:
+  - type: markdown
+    attributes:
+      value: '安全漏洞请使用私密安全报告。请隐藏公网 IP、MAC、主机名、节点令牌和本地路径。'
+  - type: input
+    id: version
+    attributes: { label: 应用版本, placeholder: '例如 1.15.0' }
+    validations: { required: true }
+  - type: input
+    id: platform
+    attributes: { label: 系统、架构与安装方式, placeholder: 'Windows 11 x64 NSIS / Ubuntu 22.04 x64 CLI' }
+    validations: { required: true }
+  - type: textarea
+    id: reproduction
+    attributes: { label: 复现步骤、预期与实际结果 }
+    validations: { required: true }
+  - type: textarea
+    id: evidence
+    attributes: { label: 脱敏错误与截图, description: '更新问题请补充原版本、目标版本、失败阶段和是否保留原安装。' }

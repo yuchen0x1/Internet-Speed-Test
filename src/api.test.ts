@@ -9,6 +9,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const mockInvoke = vi.mocked(tauriInvoke);
 
+it("passes the version reviewed by the user to updater installation", async () => {
+  mockInvoke.mockResolvedValueOnce(undefined);
+  await api.updaterInstall("1.15.0");
+  expect(mockInvoke).toHaveBeenLastCalledWith("updater_install", { expectedVersion: "1.15.0" });
+});
+
 it("passes date and order through history export and retains default whole-history calls", async () => {
   mockInvoke.mockResolvedValueOnce({ path: "fixture.csv", exported: 2, total: 2 });
   await api.historyExport("csv", { from: "2026-11-07", to: "2026-11-07", desc: false });

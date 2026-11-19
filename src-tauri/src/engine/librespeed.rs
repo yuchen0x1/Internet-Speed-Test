@@ -40,6 +40,12 @@ impl LibreSpeedAdapter {
     }
 }
 
+impl Default for LibreSpeedAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl ProviderAdapter for LibreSpeedAdapter {
     fn provider(&self) -> &'static str {

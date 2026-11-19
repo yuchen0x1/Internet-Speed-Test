@@ -47,6 +47,7 @@ const SAMPLE_INTERVAL_MS: u64 = 200;
 #[derive(Clone)]
 pub enum EventSink {
     /// 桌面端:Tauri 事件总线
+    #[cfg(feature = "desktop")]
     App(tauri::AppHandle),
     /// CLI:标准通道(供外部线程实时读取)
     Chan(std::sync::mpsc::Sender<EngineEvent>),
@@ -55,6 +56,7 @@ pub enum EventSink {
 impl EventSink {
     pub fn emit(&self, ev: EngineEvent) {
         match self {
+            #[cfg(feature = "desktop")]
             EventSink::App(h) => {
                 use tauri::Emitter as _;
                 let _ = h.emit("speedtest://event", &ev);
@@ -67,10 +69,13 @@ impl EventSink {
 
     /// 非引擎主通道的附加事件(仅桌面端有意义)
     pub fn emit_raw(&self, event: &str, payload: impl Serialize + Clone) {
+        #[cfg(feature = "desktop")]
         if let EventSink::App(h) = self {
             use tauri::Emitter as _;
             let _ = h.emit(event, payload);
         }
+        #[cfg(not(feature = "desktop"))]
+        let _ = (event, payload);
     }
 }
 

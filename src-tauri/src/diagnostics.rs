@@ -14,6 +14,7 @@ use crate::engine::quality::{
     jitter_ms as calc_jitter, parse_ping_output, parse_traceroute_output, PingOutput, TraceHop,
 };
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // ============================================================
@@ -154,12 +155,14 @@ pub struct WifiDetails {
 
 pub fn valid_host(host: &str) -> bool {
     !host.is_empty()
+        && !host.starts_with('-')
         && host.len() <= 253
         && host
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
 }
 
+#[cfg(windows)]
 pub async fn wifi_details() -> Option<WifiDetails> {
     use std::process::Command;
     use std::process::Stdio;
@@ -186,6 +189,11 @@ pub async fn wifi_details() -> Option<WifiDetails> {
     .ok()??;
     let text = String::from_utf8_lossy(&out.stdout);
     parse_wifi_details(&text)
+}
+
+#[cfg(not(windows))]
+pub async fn wifi_details() -> Option<WifiDetails> {
+    None
 }
 
 /// 解析 `netsh wlan show interfaces` 文本输出(纯函数,便于测试)
@@ -371,28 +379,35 @@ async fn icmp_ping_api(host: &str, count: u32, timeout_ms: u32) -> Option<PingOu
     .flatten()
 }
 
-#[cfg(not(windows))]
-async fn icmp_ping_api(_host: &str, _count: u32, _timeout_ms: u32) -> Option<PingOutput> {
-    None
-}
-
 /// 兜底:系统 ping 子进程(覆盖 IPv6 与 API 不可用场景)
 async fn icmp_ping_subprocess(host: &str, count: u32, timeout_ms: u32) -> PingOutput {
-    let host = host.to_string();
-    let out = tokio::process::Command::new("ping")
-        .args([
-            "-n",
-            &count.to_string(),
-            "-w",
-            &timeout_ms.to_string(),
-            &host,
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .await;
+    let timeout_ms = timeout_ms.clamp(100, 10_000);
+    let mut cmd = tokio::process::Command::new("ping");
+    #[cfg(windows)]
+    cmd.args(["-n", &count.to_string(), "-w", &timeout_ms.to_string()])
+        .creation_flags(CREATE_NO_WINDOW);
+    #[cfg(target_os = "linux")]
+    cmd.args([
+        "-n",
+        "-c",
+        &count.to_string(),
+        "-W",
+        &timeout_ms.div_ceil(1000).to_string(),
+    ]);
+    #[cfg(target_os = "macos")]
+    cmd.args([
+        "-n",
+        "-c",
+        &count.to_string(),
+        "-W",
+        &timeout_ms.to_string(),
+    ]);
+    cmd.arg(host).env("LC_ALL", "C").kill_on_drop(true);
+    let deadline = Duration::from_millis(count as u64 * (timeout_ms as u64 + 1100) + 5000);
+    let out = tokio::time::timeout(deadline, cmd.output()).await;
     match out {
-        Ok(o) => parse_ping_output(&String::from_utf8_lossy(&o.stdout)),
-        Err(_) => PingOutput {
+        Ok(Ok(o)) => parse_ping_output(&String::from_utf8_lossy(&o.stdout)),
+        _ => PingOutput {
             loss_percent: None,
             rtts_ms: vec![],
             avg_ms: None,
@@ -405,11 +420,20 @@ pub async fn traceroute(host: &str, max_hops: u32) -> Result<Vec<TraceHop>, Stri
     if !valid_host(host) {
         return Err("无效的主机名".into());
     }
-    let out = tokio::process::Command::new("tracert")
-        .args(["-d", "-h", &max_hops.to_string(), "-w", "900", host])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let max_hops = max_hops.clamp(1, 64);
+    #[cfg(windows)]
+    let mut cmd = tokio::process::Command::new("tracert");
+    #[cfg(not(windows))]
+    let mut cmd = tokio::process::Command::new("traceroute");
+    #[cfg(windows)]
+    cmd.args(["-d", "-h", &max_hops.to_string(), "-w", "900"])
+        .creation_flags(CREATE_NO_WINDOW);
+    #[cfg(not(windows))]
+    cmd.args(["-n", "-m", &max_hops.to_string(), "-w", "1", "-q", "3"]);
+    cmd.arg(host).env("LC_ALL", "C").kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(max_hops as u64 * 4 + 10), cmd.output())
         .await
+        .map_err(|_| "路由追踪超时".to_string())?
         .map_err(|e| e.to_string())?;
     if !out.status.success() && out.stdout.is_empty() {
         return Err("路由追踪启动失败".into());
@@ -1424,6 +1448,20 @@ pub async fn nat_type() -> NatReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_options_are_not_hosts() {
+        assert!(!valid_host("--help"));
+        assert!(!valid_host("-t"));
+        assert!(valid_host("my-host.example"));
+    }
+
+    #[tokio::test]
+    async fn subprocess_loopback_returns_measured_samples() {
+        let result = icmp_ping_subprocess("127.0.0.1", 2, 1000).await;
+        assert_eq!(result.loss_percent, Some(0.0));
+        assert_eq!(result.rtts_ms.len(), 2);
+    }
 
     #[test]
     fn test_dns_query_bytes() {
