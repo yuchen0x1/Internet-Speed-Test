@@ -2,13 +2,30 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.8.0`～`v1.14.0` 为已有或本次发布的 GitHub Releases；`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。一般使用请下载 [最新稳定版](https://github.com/yuchen0x1/Internet-Speed-Test/releases/latest)。
+`v1.15.1` 为待发布补丁；已有 GitHub Releases 的状态以各版本记录为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；旧 `v1.15.0` 当前没有上传资产，详见下方核验记录。
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
+
+<a id="v1-15-1"></a>
+
+## v1.15.1 (待发布；2026-11-20 准备)
+
+本版为维护补丁，仅包含以下修复；CLI、测速引擎及语言切换等已有能力沿用此前版本。
+
+- 为 Windows 专用 Wi-Fi 解析函数及其测试、ICMP 载荷常量补充 `#[cfg(windows)]`，修复 Linux/macOS headless 构建在 `--no-default-features` 严格 Clippy `-D warnings` 下的 dead-code 失败，不放宽 lint。
+- 补齐 v1.15.0 发布日志的稳定锚点，并通过 `npm run docs:sync` 同步根目录 `CHANGELOG.md`，修复发布文档检查。
+
+修复已由 [PR #16](https://github.com/yuchen0x1/Internet-Speed-Test/pull/16) 合入，基线提交为 [42cd146](https://github.com/yuchen0x1/Internet-Speed-Test/commit/42cd14694297535e7cce884d549c1a09a5cf549f)。本条记录仅准备 1.15.1 版本与说明，尚未创建该版本 tag 或 Release；发布仍须通过现有版本、文档、IPC、依赖审计、测试、headless 多平台与签名门禁。
 
 <a id="v1-15-0"></a>
 
 ## v1.15.0 (2026-11-20)
+
+2026-11-20 核验：[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.0) 的 `publishedAt` 为 `2026-11-19T16:51:27Z`（北京时间 2026-11-20 00:51:27），`isDraft=false`、`isPrerelease=false`、`isImmutable=false`，上传资产数为 **0**（empty、mutable Release）。这不包含 GitHub 自动生成的源码归档，也不表示已有可下载安装包、CLI 包或更新清单。
+
+本地与远端 `v1.15.0` tag 均指向原提交 [a0ac70d](https://github.com/yuchen0x1/Internet-Speed-Test/commit/a0ac70de06df891e414be4da53f915aad49b5db1)；该旧 tag 不包含后续 PR #16 修复，不代表 1.15.1 源码。本次准备不移动旧 tag，也不覆盖旧 Release 或其资产。
+
+以下为 v1.15.0 的历史功能记录，不计入 1.15.1 新增：
 
 - 新增 CLI 打包与冒烟脚本（package-cli / smoke-cli），Rust 侧提供 netvision-cli 独立入口。
 - 诊断引擎改进：Cloudflare 与 LibreSpeed 引擎、质量探测与存储层更新。
@@ -24,6 +41,8 @@
 
 | 版本 | 日期与状态 | 主要变化 |
 | --- | --- | --- |
+| [v1.15.1](#v1-15-1) | 2026-11-20 准备 · 待发布 | Windows 专用 cfg 与发布文档锚点、镜像同步修复 |
+| [v1.15.0](#v1-15-0) | 2026-11-20 · Release 已发布、无上传资产、mutable | 历史功能记录；旧 tag 不含 PR #16 修复 |
 | [v1.14.1](#v1-14-1) | 2026-11-17 · 未发布 | 自动语言选择、手动切换和核心壳层本地化 |
 | [v1.14.0](#v1-14-0) | 2026-11-16 · 本次发布 | 历史筛选、诊断编排/报告、设置备份、监控聚合/导出、CLI 与 IPC 契约、键盘与可访问性 |
 | [v1.13.0](#v1-13-0) | 2026-11-13 · 公开发布 | 拨测恢复与导出、真实包数进度、监控指标可信度 |
