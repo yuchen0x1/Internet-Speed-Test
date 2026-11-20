@@ -197,6 +197,7 @@ pub async fn wifi_details() -> Option<WifiDetails> {
 }
 
 /// 解析 `netsh wlan show interfaces` 文本输出(纯函数,便于测试)
+#[cfg(windows)]
 fn parse_wifi_details(text: &str) -> Option<WifiDetails> {
     let mut d = WifiDetails {
         ssid: None,
@@ -267,6 +268,7 @@ fn parse_wifi_details(text: &str) -> Option<WifiDetails> {
 // ============================================================
 
 /// ICMP 探测载荷(标识用途,长度 32 字节)
+#[cfg(windows)]
 const ICMP_PAYLOAD: &[u8] = b"NetVisionPro-ICMP-Probe-Payload!";
 
 #[cfg(windows)]
@@ -1522,6 +1524,7 @@ mod tests {
         assert!(!valid_host("a\tb"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_parse_wifi_details_fields() {
         let text = "\
@@ -1546,6 +1549,7 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
         assert_eq!(d.transmit_rate_mbps, Some(400.0));
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_parse_wifi_details_absent_returns_none() {
         assert!(parse_wifi_details(
