@@ -21,17 +21,17 @@
     "cli:smoke": "node scripts/smoke-cli.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.7.0",
+    "@tauri-apps/api": "^2.12.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "zustand": "^5.0.5"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.7.0",
+    "@tauri-apps/cli": "^2.12.5",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.5.0",
-    "jsdom": "^31.0.0",
+    "jsdom": "^31.0.1",
     "png-to-ico": "^2.1.8",
     "sharp": "^0.35.5",
     "typescript": "^5.8.3",
