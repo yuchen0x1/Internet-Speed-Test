@@ -6,6 +6,8 @@
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
 
+<a id="v1-15-0"></a>
+
 ## v1.15.0 (2026-11-20)
 
 - 新增 CLI 打包与冒烟脚本（package-cli / smoke-cli），Rust 侧提供 netvision-cli 独立入口。
