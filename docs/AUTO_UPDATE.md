@@ -43,7 +43,9 @@ git push origin v1.13.0
 - 检查更新清单含签名和 HTTPS GitHub 下载地址；
 - 创建 GitHub Release 并上传资产。
 
-如果同名 Release 已经存在，工作流会失败并保留原有资产，不会使用 `--clobber` 覆盖发布文件。
+如果同名 Release 已经存在，工作流只补传缺少的资产；已存在的同名资产会保留，不会使用 `--clobber` 覆盖发布文件。
+
+对于历史空 Release，可在 GitHub Actions 手动运行 `Repair release assets`，输入已存在的版本标签。该工作流按标签源码构建并签名 Windows 安装包，验证版本和 Release 后仅补传缺失的安装包、签名、校验和及 `latest.json`；它不会创建 Release 或覆盖同名资产。
 
 ## GitHub Secrets
 

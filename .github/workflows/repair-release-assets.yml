@@ -1,0 +1,133 @@
+name: Repair release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to restore, for example v1.15.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.22.2
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@263313d2989f864a2b8613f97277288638e7d8f8 # 1.99.1
+
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Validate target release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          }
+          VERSION=$(node -p "require('./package.json').version")
+          [[ "$RELEASE_TAG" == "v$VERSION" ]] || {
+            echo "Tag $RELEASE_TAG does not match source version $VERSION" >&2
+            exit 1
+          }
+          npm run version:check
+          gh release view "$RELEASE_TAG" >/dev/null
+
+      - name: Install frontend dependencies
+        run: npm ci --registry=https://registry.npmjs.org
+
+      - name: Run release tests
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and sign installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles nsis --config src-tauri/updater.conf.json
+
+      - name: Prepare missing release assets
+        id: assets
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          SRC="src-tauri/target/release/bundle/nsis/NetVision Pro_${VERSION}_x64-setup.exe"
+          test -f "$SRC" || { echo "Installer not found: $SRC" >&2; exit 1; }
+          test -f "${SRC}.sig" || { echo "Signature not found: ${SRC}.sig" >&2; exit 1; }
+          mkdir -p release-artifacts
+          INSTALLER="NetVision.Pro_${VERSION}_x64-setup.exe"
+          cp "$SRC" "release-artifacts/$INSTALLER"
+          cp "${SRC}.sig" "release-artifacts/${INSTALLER}.sig"
+          ( cd release-artifacts && sha256sum "$INSTALLER" > SHA256SUMS.txt )
+          node -e '
+            const fs = require("fs");
+            const version = require("./src-tauri/tauri.conf.json").version;
+            const repo = process.env.GITHUB_REPOSITORY;
+            const tag = process.env.RELEASE_TAG;
+            const sig = fs.readFileSync(`release-artifacts/NetVision.Pro_${version}_x64-setup.exe.sig`, "utf8").trim();
+            const { execFileSync } = require("child_process");
+            const notes = execFileSync("git", ["tag", "-l", "--format=%(contents)", tag], { encoding: "utf8" }).trim();
+            const latest = {
+              version,
+              notes: notes || `NetVision Pro ${tag}`,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": {
+                  signature: sig,
+                  url: `https://github.com/${repo}/releases/download/${tag}/NetVision.Pro_${version}_x64-setup.exe`,
+                },
+              },
+            };
+            fs.writeFileSync("release-artifacts/latest.json", JSON.stringify(latest, null, 2) + "\n");
+          '
+          test -s release-artifacts/latest.json
+          test -s release-artifacts/SHA256SUMS.txt
+
+          mapfile -t existing_assets < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          missing_assets=()
+          for file in release-artifacts/*; do
+            name="${file##*/}"
+            if printf '%s\n' "${existing_assets[@]}" | grep -Fxq -- "$name"; then
+              echo "Keeping existing asset: $name"
+            else
+              missing_assets+=("$file")
+            fi
+          done
+          if ((${#missing_assets[@]})); then
+            gh release upload "$RELEASE_TAG" "${missing_assets[@]}"
+          else
+            echo "Release already contains all generated assets."
+          fi
+
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'

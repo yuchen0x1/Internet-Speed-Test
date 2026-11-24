@@ -155,14 +155,28 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在；为避免覆盖已有资产，本次发布终止。" >&2
-            exit 1
-          fi
-          # 注释标签(tag -m)即发布说明;空标签消息回退为自动生成。
-          git tag -l --format='%(contents)' "$TAG" > release-notes.txt
-          if [ -s release-notes.txt ] && grep -q '[^[:space:]]' release-notes.txt; then
-            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --notes-file release-notes.txt
+            mapfile -t existing_assets < <(gh release view "$TAG" --json assets --jq '.assets[].name')
+            missing_assets=()
+            for file in release-artifacts/*; do
+              name="${file##*/}"
+              if printf '%s\n' "${existing_assets[@]}" | grep -Fxq -- "$name"; then
+                echo "保留已存在资产: $name"
+              else
+                missing_assets+=("$file")
+              fi
+            done
+            if ((${#missing_assets[@]})); then
+              gh release upload "$TAG" "${missing_assets[@]}"
+            else
+              echo "Release $TAG 已包含全部构建资产。"
+            fi
           else
-            gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --generate-notes
+            # 注释标签(tag -m)即发布说明;空标签消息回退为自动生成。
+            git tag -l --format='%(contents)' "$TAG" > release-notes.txt
+            if [ -s release-notes.txt ] && grep -q '[^[:space:]]' release-notes.txt; then
+              gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --notes-file release-notes.txt
+            else
+              gh release create "$TAG" release-artifacts/* --title "NetVision Pro ${TAG}" --generate-notes
+            fi
           fi
           gh release view "$TAG" --json assets --jq '.assets[].name'
