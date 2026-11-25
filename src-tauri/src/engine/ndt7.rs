@@ -35,6 +35,7 @@ const LOCATE_URL: &str = "https://locate.measurementlab.net/v2/nearest/ndt/ndt7"
 const WS_CHUNK_BYTES: usize = 65_535;
 /// 上传随机数据池大小
 const UPLOAD_POOL_BYTES: usize = 1024 * 1024;
+const RECONNECT_BACKOFF: Duration = Duration::from_millis(300);
 
 pub struct Ndt7Adapter {
     client: reqwest::Client,
@@ -104,6 +105,9 @@ impl Ndt7Adapter {
         }
         let text = resp.text().await.ok()?;
         let candidates = parse_locate_candidates(&text);
+        if !self.websocket_direct_allowed {
+            return candidates.into_iter().next();
+        }
         let token = tokio_util::sync::CancellationToken::new();
         // 逐个握手探测(4s 上限),选**握手最快**的候选:Locate 首台不保证质量最优
         let mut best: Option<(ServerNodeInfo, f64)> = None;
@@ -127,6 +131,13 @@ impl Ndt7Adapter {
             }
         }
         best.map(|(n, _)| n)
+    }
+}
+
+async fn wait_before_reconnect(token: &CancellationToken) -> bool {
+    tokio::select! {
+        _ = token.cancelled() => false,
+        _ = tokio::time::sleep(RECONNECT_BACKOFF) => !token.is_cancelled(),
     }
 }
 
@@ -342,7 +353,9 @@ impl ProviderAdapter for Ndt7Adapter {
                     let mut ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
                         Ok(s) => s,
                         Err(_) => {
-                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            if !wait_before_reconnect(&token).await {
+                                return;
+                            }
                             continue;
                         }
                     };
@@ -369,6 +382,9 @@ impl ProviderAdapter for Ndt7Adapter {
                             }
                             Err(_) => return, // 阶段截止
                         }
+                    }
+                    if !wait_before_reconnect(&token).await {
+                        return;
                     }
                 }
             });
@@ -492,6 +508,14 @@ impl ProviderAdapter for Ndt7Adapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reconnect_backoff_observes_cancellation() {
+        let token = CancellationToken::new();
+        token.cancel();
+
+        assert!(!wait_before_reconnect(&token).await);
+    }
 
     /// Locate API v2 真实响应结构(含访问令牌)
     const LOCATE_FIXTURE: &str = r#"[{

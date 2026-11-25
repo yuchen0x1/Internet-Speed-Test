@@ -52,6 +52,7 @@ pub struct ProbeOutcome {
     pub node: ServerNodeInfo,
     pub alive: bool,
     pub latency_ms: Option<f64>,
+    pub reason: Option<String>,
 }
 
 impl Default for ServerRegistry {
@@ -221,18 +222,22 @@ impl ServerRegistry {
             .map(|node| async move {
                 let adapter = self.adapter_for(&node);
                 let mut best: Option<f64> = None;
+                let mut reason = None;
                 for _ in 0..2 {
                     if token.is_cancelled() {
                         break;
                     }
-                    if let Ok(rtt) = adapter.ping_rtt(&node, token).await {
-                        best = Some(best.map_or(rtt, |b: f64| b.min(rtt)));
+                    match adapter.ping_rtt(&node, token).await {
+                        Ok(rtt) => best = Some(best.map_or(rtt, |b: f64| b.min(rtt))),
+                        Err(error) if !token.is_cancelled() => reason = Some(error),
+                        Err(_) => {}
                     }
                 }
                 ProbeOutcome {
                     node,
                     alive: best.is_some(),
                     latency_ms: best,
+                    reason: if best.is_some() { None } else { reason },
                 }
             })
             .buffer_unordered(concurrency.max(1));

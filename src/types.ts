@@ -343,7 +343,15 @@ export type ProbeResult = {
   id: string;
   alive: boolean;
   latencyMs: number | null;
+  reason: string | null;
 };
+
+export interface ProxyRuntimeStatus {
+  mode: "auto" | "direct" | "manual";
+  uses_proxy: boolean;
+  warning: string | null;
+  ndt7_websocket_available: boolean;
+}
 
 export interface ConnectivityEntry {
   name: string;

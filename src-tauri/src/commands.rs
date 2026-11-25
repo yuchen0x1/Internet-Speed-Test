@@ -74,6 +74,14 @@ pub struct ExportOutcome {
     pub total: u32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyRuntimeStatus {
+    pub mode: String,
+    pub uses_proxy: bool,
+    pub warning: Option<String>,
+    pub ndt7_websocket_available: bool,
+}
+
 /// 可迁移的设置备份格式。使用显式格式名和版本号，避免把任意 JSON
 /// 当作设置文件直接覆盖当前配置。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -342,6 +350,35 @@ pub async fn prometheus_status(
     Ok(state.prometheus.status())
 }
 
+#[tauri::command]
+pub async fn proxy_runtime_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<ProxyRuntimeStatus, String> {
+    let settings = state.settings.settings.read().await.clone();
+    match crate::network::ProxyPolicy::from_parts(
+        &settings.proxy_mode,
+        &settings.proxy_url,
+        &settings.proxy_bypass,
+    ) {
+        Ok(policy) => Ok(proxy_runtime_status_from_policy(&policy)),
+        Err(warning) => Ok(ProxyRuntimeStatus {
+            mode: settings.proxy_mode,
+            uses_proxy: true,
+            warning: Some(warning),
+            ndt7_websocket_available: false,
+        }),
+    }
+}
+
+fn proxy_runtime_status_from_policy(policy: &crate::network::ProxyPolicy) -> ProxyRuntimeStatus {
+    ProxyRuntimeStatus {
+        mode: policy.mode().as_str().to_string(),
+        uses_proxy: policy.has_proxy(),
+        warning: policy.unavailable_reason().map(str::to_string),
+        ndt7_websocket_available: policy.websocket_direct_allowed(),
+    }
+}
+
 // ============================================================
 // 测速节点
 // ============================================================
@@ -361,6 +398,7 @@ pub async fn servers_list(
 /// 刷新节点:重新拉列表 + 并发探测全部节点(返回含延迟与可用性)
 #[tauri::command]
 pub async fn servers_refresh(
+    app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ServerNodeInfo>, String> {
     let settings = state.settings.settings.read().await;
@@ -372,9 +410,18 @@ pub async fn servers_refresh(
     let token = tokio_util::sync::CancellationToken::new();
     let probes = registry.probe_nodes(&nodes, 8, &token).await;
     let mut map: HashMap<String, (bool, Option<f64>)> = HashMap::new();
+    let mut probe_events = Vec::with_capacity(probes.len());
     for p in probes {
-        map.insert(p.node.id, (p.alive, p.latency_ms));
+        map.insert(p.node.id.clone(), (p.alive, p.latency_ms));
+        probe_events.push(serde_json::json!({
+            "id": p.node.id,
+            "alive": p.alive,
+            "latencyMs": p.latency_ms,
+            "reason": p.reason,
+        }));
     }
+    use tauri::Emitter as _;
+    let _ = app.emit("servers://probed", probe_events);
     for n in &mut nodes {
         if let Some((alive, lat)) = map.get(&n.id) {
             n.alive = Some(*alive);
@@ -1848,6 +1895,24 @@ mod tests {
         assert_eq!(policy.mode(), crate::network::ProxyMode::Manual);
         assert!(policy.has_proxy());
         assert!(!policy.is_direct_route());
+    }
+
+    #[test]
+    fn proxy_runtime_status_does_not_expose_proxy_credentials() {
+        let policy = crate::network::ProxyPolicy::from_parts(
+            "manual",
+            "http://user:secret@127.0.0.1:7890",
+            "",
+        )
+        .unwrap();
+
+        let status = proxy_runtime_status_from_policy(&policy);
+        let serialized = serde_json::to_string(&status).unwrap();
+
+        assert!(status.uses_proxy);
+        assert!(!status.ndt7_websocket_available);
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("127.0.0.1"));
     }
 
     #[test]

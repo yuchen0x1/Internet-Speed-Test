@@ -6,7 +6,7 @@ import { useServers } from "../store/test";
 import { fmtBytes, isCancelError } from "../lib/format";
 import { ConfirmModal, Segmented } from "../components/ui";
 import { Icon } from "../components/Icon";
-import type { PrometheusStatus, UpdaterInfo } from "../types";
+import type { PrometheusStatus, ProxyRuntimeStatus, UpdaterInfo } from "../types";
 import { useI18n, type LocaleSetting } from "../i18n";
 
 export function SettingsPage() {
@@ -22,6 +22,7 @@ export function SettingsPage() {
   const [backupBusy, setBackupBusy] = useState<"export" | "import" | null>(null);
   const [proxyUrlDraft, setProxyUrlDraft] = useState("");
   const [proxyBypassDraft, setProxyBypassDraft] = useState("");
+  const [proxyStatus, setProxyStatus] = useState<ProxyRuntimeStatus | null>(null);
   // 端点真实状态:设置里的开关只代表意图,绑定可能失败(端口占用)
   const [promStatus, setPromStatus] = useState<PrometheusStatus | null>(null);
 
@@ -30,6 +31,14 @@ export function SettingsPage() {
       setPromStatus(await api.prometheusStatus());
     } catch {
       setPromStatus(null); // 状态不可知时退回只显示设置意图
+    }
+  }, []);
+
+  const refreshProxyStatus = useCallback(async () => {
+    try {
+      setProxyStatus(await api.proxyRuntimeStatus());
+    } catch {
+      setProxyStatus(null);
     }
   }, []);
 
@@ -114,6 +123,7 @@ export function SettingsPage() {
       useApp.getState().applyTheme();
       await loadServers();
       await refreshPromStatus();
+      await refreshProxyStatus();
       toast("success", "设置已导入并生效");
     } catch (e) {
       if (!isCancelError(e)) toast("error", `设置导入失败：${errMsg(e)}`);
@@ -142,6 +152,10 @@ export function SettingsPage() {
     const t = window.setTimeout(refreshPromStatus, 400);
     return () => window.clearTimeout(t);
   }, [refreshPromStatus, settings?.prometheus_enabled, settings?.prometheus_port]);
+
+  useEffect(() => {
+    void refreshProxyStatus();
+  }, [refreshProxyStatus, settings?.proxy_mode, settings?.proxy_url, settings?.proxy_bypass]);
 
   if (!settings) return null;
   const upd = updateSettings;
@@ -503,6 +517,16 @@ export function SettingsPage() {
               spellCheck={false}
             />
           </div>
+          {proxyStatus?.warning && (
+            <div className="test-error settings-proxy-warning" role="alert">
+              {proxyStatus.warning} 当前自动代理规则无法测速或诊断；应用不会静默改为直连。
+            </div>
+          )}
+          {!proxyStatus?.warning && proxyStatus?.uses_proxy && !proxyStatus.ndt7_websocket_available && (
+            <div className="settings-proxy-notice" role="status">
+              当前代理下 HTTP 测速可用；NDT7 WebSocket 暂不可用，自动测速会跳过该协议，不会绕过代理直连。
+            </div>
+          )}
         </section>
 
         {/* 隐私 */}

@@ -26,7 +26,7 @@ const CUSTOM_ENDPOINTS = {
 export function ServersPage() {
   const toast = useApp((s) => s.toast);
   const settings = useApp((s) => s.settings);
-  const { nodes, loading, probing, load, refresh } = useServers();
+  const { nodes, probeErrors, loading, probing, load, refresh } = useServers();
   const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
@@ -127,6 +127,7 @@ export function ServersPage() {
               {sorted.map((n) => {
                 const active = activeUrl === n.base_url;
                 const lat = n.latency_ms;
+                const probeError = probeErrors[n.id];
                 return (
                   <tr key={n.id}>
                     <td>
@@ -150,7 +151,9 @@ export function ServersPage() {
                       ) : n.alive ? (
                         <span className="chip green"><span className="status-dot ok" style={{ width: 6, height: 6 }} /> 可用</span>
                       ) : (
-                        <span className="chip red">不可达</span>
+                        <span className="chip red" title={probeError ?? undefined}>
+                          {probeError?.includes("NDT7 WebSocket") ? "代理不支持" : "不可达"}
+                        </span>
                       )}
                     </td>
                     <td>
