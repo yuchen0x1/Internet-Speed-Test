@@ -90,7 +90,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            theme: "dark".into(),
+            theme: "light".into(),
             animations: true,
             anim_intensity: 1.0,
             refresh_interval_ms: 1000,
@@ -358,7 +358,8 @@ mod tests {
     #[test]
     fn test_partial_json_uses_defaults() {
         // 前端只传部分字段时,其余字段走默认值(serde(default))
-        let back: AppSettings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        let back: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(back.theme, "light");
         assert_eq!(back.test_duration_secs, 10);
         assert_eq!(back.up_concurrency, 4);
         assert!(back.autosave_history);

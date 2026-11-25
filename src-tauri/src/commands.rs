@@ -133,7 +133,7 @@ pub async fn set_settings(
     s.auto_test_interval_minutes = s.auto_test_interval_minutes.clamp(15, 1440);
     s.update_check_interval_hours = s.update_check_interval_hours.clamp(6, 168);
     if !["dark", "light", "system"].contains(&s.theme.as_str()) {
-        s.theme = "dark".into();
+        s.theme = "light".into();
     }
     if !["auto", "manual"].contains(&s.node_mode.as_str()) {
         s.node_mode = "auto".into();
@@ -208,7 +208,7 @@ fn normalize_imported_settings(mut s: AppSettings) -> Result<AppSettings, String
         _ => 365,
     };
     if !["dark", "light", "system"].contains(&s.theme.as_str()) {
-        s.theme = "dark".into();
+        s.theme = "light".into();
     }
     if !["auto", "manual"].contains(&s.node_mode.as_str()) {
         s.node_mode = "auto".into();
@@ -2027,7 +2027,7 @@ mod tests {
         assert_eq!(normalized.up_concurrency, 1);
         assert_eq!(normalized.test_duration_secs, 5);
         assert_eq!(normalized.prometheus_port, 1024);
-        assert_eq!(normalized.theme, "dark");
+        assert_eq!(normalized.theme, "light");
         assert_eq!(normalized.custom_nodes[0].provider, "custom");
         assert_eq!(normalized.custom_nodes[0].base_url, "https://example.com");
         assert_eq!(normalized.default_node_url, "https://example.com");

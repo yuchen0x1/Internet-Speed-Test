@@ -1,13 +1,13 @@
 <!doctype html>
-<html lang="zh-CN" class="theme-dark">
+<html lang="zh-CN" class="theme-light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" />
     <title>NetVision Pro</title>
     <style>
-      /* 首帧防白屏:与全局背景一致 */
-      html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; background: #05070d; overflow: hidden; }
+      /* 首帧使用浅色背景,加载设置后跟随所选主题。 */
+      html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg0, #eef3fb); overflow: hidden; }
     </style>
   </head>
   <body>

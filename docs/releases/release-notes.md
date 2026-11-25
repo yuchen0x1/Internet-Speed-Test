@@ -2,9 +2,19 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.15.2` 是本轮代理、测速可靠性与桌面布局维护版本；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.2) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
+`v1.15.3` 将默认主题改为浅色；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.3) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
+
+<a id="v1-15-3"></a>
+
+## v1.15.3 (2026-11-25)
+
+- 首次启动和缺少主题字段的配置默认使用浅色模式；保存设置或导入备份时，无效主题值回退到浅色。
+- 启动 HTML 首帧使用浅色背景，样式加载后随主题变量更新，避免首次启动先显示深色背景。
+- 保留已有深色、浅色或跟随系统的选择；不强制迁移现有设置，不改动历史数据。
+- 保持产品标识、稳定版更新端点及签名公钥，沿用旧版应用内检查更新路径。
+- 本地验证：13 个前端测试文件、81 项测试、TypeScript/生产构建、IPC 契约、统一版本、Rust 格式检查通过。新增默认主题断言并更新无效导入主题的回退断言；Rust 测试与 Windows 签名安装包由 CI 和发布工作流验证，本机缺少 MSVC 链接器。
 
 <a id="v1-15-2"></a>
 
