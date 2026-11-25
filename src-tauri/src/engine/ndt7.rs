@@ -546,7 +546,7 @@ impl ProviderAdapter for Ndt7Adapter {
                     Ok(()) => {
                         counters.add_sent(chunk.len() as u64);
                         frames_sent += 1;
-                        if frames_sent % 8 == 0 {
+                        if frames_sent.is_multiple_of(8) {
                             chunk_bytes = (chunk_bytes * 2).min(WS_MAX_CHUNK_BYTES);
                         }
                     }
@@ -683,7 +683,8 @@ fn validated_server_duration(
     let close_to_client_clock =
         candidate <= client_elapsed + skew && client_elapsed <= candidate + skew;
     let monotonic = previous.map(|value| candidate >= value).unwrap_or(true);
-    (in_reasonable_range && close_to_client_clock && monotonic).then_some(candidate)
+    (in_reasonable_range && close_to_client_clock && monotonic)
+        .then_some(candidate.max(client_elapsed))
 }
 
 #[cfg(test)]
@@ -836,7 +837,11 @@ mod tests {
     fn upload_telemetry_duration_must_be_monotonic_and_near_client_time() {
         assert_eq!(
             validated_server_duration(Duration::from_millis(150), Duration::from_millis(600), None),
-            Some(Duration::from_millis(150))
+            Some(Duration::from_millis(600))
+        );
+        assert_eq!(
+            validated_server_duration(Duration::from_millis(700), Duration::from_millis(600), None),
+            Some(Duration::from_millis(700))
         );
         assert_eq!(
             validated_server_duration(
