@@ -106,7 +106,20 @@ export const useTest = create<TestStore>((set, get) => ({
             break;
           }
           case "server":
-            set({ node: ev.node });
+            set((s) => s.node?.id === ev.node.id
+              ? { node: ev.node }
+              : {
+                  node: ev.node,
+                  liveDown: 0,
+                  liveUp: 0,
+                  downSamples: [],
+                  upSamples: [],
+                  latencySamples: [],
+                  loadedDown: [],
+                  loadedUp: [],
+                  downloadedMb: 0,
+                  uploadedMb: 0,
+                });
             break;
           case "latency":
             set((s) => ({
@@ -143,11 +156,19 @@ export const useTest = create<TestStore>((set, get) => ({
             set({
               running: false,
               result: ev.result,
+              node: ev.result.server,
               phase: "finished",
               progress: ev.result.status === "completed" ? 100 : 0,
               message: ev.result.status === "completed" ? "测速完成" : ev.result.status === "cancelled" ? "已取消" : "测速失败",
               liveDown: 0,
               liveUp: 0,
+              downSamples: ev.result.down_samples ?? [],
+              upSamples: ev.result.up_samples ?? [],
+              latencySamples: ev.result.latency_samples ?? [],
+              loadedDown: [],
+              loadedUp: [],
+              downloadedMb: 0,
+              uploadedMb: 0,
               elapsedMs: ev.result.duration_ms,
               error: ev.result.error,
             });
@@ -155,11 +176,11 @@ export const useTest = create<TestStore>((set, get) => ({
             break;
           case "failed":
             stopTimer();
-            set({ running: false, phase: "finished", error: ev.error, progress: 0 });
+            set({ running: false, phase: "finished", error: ev.error, progress: 0, result: null });
             break;
           case "cancelled":
             stopTimer();
-            set({ running: false, phase: "finished", progress: 0, message: "已取消" });
+            set({ running: false, phase: "finished", progress: 0, message: "已取消", result: null });
             break;
         }
       });

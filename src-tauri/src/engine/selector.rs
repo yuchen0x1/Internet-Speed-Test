@@ -11,6 +11,9 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::network::ProxyPolicy;
+use crate::settings::AppSettings;
+
 use super::adapter::{PhaseConfig, ProviderAdapter, ThroughputCounters};
 use super::cloudflare::{builtin_node, CloudflareAdapter};
 use super::librespeed::LibreSpeedAdapter;
@@ -40,6 +43,7 @@ pub struct ServerRegistry {
     libre: LibreSpeedAdapter,
     cloudflare: CloudflareAdapter,
     ndt7: Ndt7Adapter,
+    policy: ProxyPolicy,
 }
 
 /// 节点探测结果
@@ -58,11 +62,25 @@ impl Default for ServerRegistry {
 
 impl ServerRegistry {
     pub fn new() -> Self {
+        Self::with_policy(ProxyPolicy::default())
+    }
+
+    pub fn with_policy(policy: ProxyPolicy) -> Self {
         Self {
-            libre: LibreSpeedAdapter::new(),
-            cloudflare: CloudflareAdapter::new(),
-            ndt7: Ndt7Adapter::new(),
+            libre: LibreSpeedAdapter::with_policy(&policy),
+            cloudflare: CloudflareAdapter::with_policy(&policy),
+            ndt7: Ndt7Adapter::with_policy(&policy),
+            policy,
         }
+    }
+
+    pub fn from_settings(settings: &AppSettings) -> Result<Self, String> {
+        let policy = ProxyPolicy::from_parts(
+            &settings.proxy_mode,
+            &settings.proxy_url,
+            &settings.proxy_bypass,
+        )?;
+        Ok(Self::with_policy(policy))
     }
 
     pub fn adapter_dyn(&self, node: &ServerNodeInfo) -> &dyn ProviderAdapter {
@@ -119,9 +137,13 @@ impl ServerRegistry {
 
     /// 在线获取官方列表(8s 超时,失败返回 None)
     async fn fetch_online_list(&self) -> Option<Vec<ServerNodeInfo>> {
-        let client = reqwest::Client::builder()
-            .user_agent(format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(5))
+        let client = self
+            .policy
+            .client_builder(
+                &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
+                Duration::from_secs(5),
+            )
+            .ok()?
             .timeout(Duration::from_secs(10))
             .build()
             .ok()?;
@@ -225,6 +247,9 @@ impl ServerRegistry {
         token: &CancellationToken,
     ) -> (Option<ServerNodeInfo>, Vec<ProbeOutcome>) {
         let probes = self.probe_nodes(nodes, 8, token).await;
+        if token.is_cancelled() {
+            return (None, probes);
+        }
         let mut alive: Vec<ProbeOutcome> = probes.iter().filter(|p| p.alive).cloned().collect();
         if alive.is_empty() {
             return (None, probes);
@@ -253,20 +278,45 @@ impl ServerRegistry {
             })
             .buffer_unordered(4);
         let caps: Vec<(ServerNodeInfo, f64)> = cap_stream.collect::<Vec<_>>().await;
+        if token.is_cancelled() {
+            return (None, probes);
+        }
+        // 只使用有限且大于零的观测值归一化。以 1ms 作为初始最大值会让
+        // 所有真实 RTT >= 1ms 的节点延迟分数都变成 0；空/NaN 观测也不能
+        // 参与排序，否则一次异常值就可能污染整个优选结果。
         let max_latency = alive
             .iter()
             .filter_map(|p| p.latency_ms)
-            .fold(1.0f64, f64::max);
-        let max_mbps = caps.iter().map(|(_, m)| *m).fold(0.000001f64, f64::max);
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .fold(0.0f64, f64::max);
+        let max_mbps = caps
+            .iter()
+            .map(|(_, m)| *m)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .fold(0.0f64, f64::max);
         // 综合评分:延迟 65% + 下载能力 35%(归一化)
         let mut best: Option<(ServerNodeInfo, f64)> = None;
         for (node, mbps) in &caps {
             let Some(p) = alive.iter().find(|p| p.node.id == node.id) else {
                 continue;
             };
-            let lat = p.latency_ms.unwrap_or(999.0);
-            let lat_score = 1.0 - (lat / max_latency).clamp(0.0, 1.0);
-            let cap_score = (mbps / max_mbps).clamp(0.0, 1.0);
+            let Some(lat) = p.latency_ms.filter(|v| v.is_finite() && *v > 0.0) else {
+                continue;
+            };
+            // 没有有效下载样本的节点不能成为“能力探测成功”的优选节点。
+            if !mbps.is_finite() || *mbps <= 0.0 {
+                continue;
+            }
+            let lat_score = if max_latency > 0.0 {
+                1.0 - (lat / max_latency).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let cap_score = if max_mbps > 0.0 {
+                (*mbps / max_mbps).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             let score = lat_score * 0.65 + cap_score * 0.35;
             if best.as_ref().is_none_or(|(_, s)| score > *s) {
                 best = Some((node.clone(), score));

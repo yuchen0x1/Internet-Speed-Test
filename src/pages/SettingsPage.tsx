@@ -1,4 +1,4 @@
-// 设置中心:外观 / 测速 / 监控 / 隐私 / 关于 —— 所有选项真实生效
+// 设置中心:外观 / 测速 / 监控 / 网络 / 隐私 / 关于 —— 所有选项真实生效
 import { useCallback, useEffect, useState } from "react";
 import { api, errMsg, onUpdaterProgress } from "../api";
 import { useApp } from "../store/app";
@@ -20,6 +20,8 @@ export function SettingsPage() {
   const loadServers = useServers((s) => s.load);
   const [confirmClear, setConfirmClear] = useState(false);
   const [backupBusy, setBackupBusy] = useState<"export" | "import" | null>(null);
+  const [proxyUrlDraft, setProxyUrlDraft] = useState("");
+  const [proxyBypassDraft, setProxyBypassDraft] = useState("");
   // 端点真实状态:设置里的开关只代表意图,绑定可能失败(端口占用)
   const [promStatus, setPromStatus] = useState<PrometheusStatus | null>(null);
 
@@ -126,6 +128,14 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    setProxyUrlDraft(settings?.proxy_url ?? "");
+  }, [settings?.proxy_url]);
+
+  useEffect(() => {
+    setProxyBypassDraft(settings?.proxy_bypass ?? "");
+  }, [settings?.proxy_bypass]);
+
+  useEffect(() => {
     refreshPromStatus();
     // 绑定是异步的:设置变化后短延迟再查一次,避免"刚开就显示未监听"的假失败
     if (!settings?.prometheus_enabled) return;
@@ -149,8 +159,9 @@ export function SettingsPage() {
       </div>
 
       <div className="settings-grid">
-        <section className="card pad">
-          <div className="chart-title"><Icon name="globe" size={15} /> {t("language")}</div>
+        <section className="card pad settings-section settings-section--appearance">
+          <div className="chart-title"><Icon name="eye" size={15} /> 通用设置与外观</div>
+          <div className="chart-title mt12"><Icon name="globe" size={15} /> {t("language")}</div>
           <div className="set-row">
             <div>
               <div className="label">{t("language")}</div>
@@ -162,10 +173,7 @@ export function SettingsPage() {
               <option value="en-US">English</option>
             </select>
           </div>
-        </section>
-        {/* 外观 */}
-        <section className="card pad">
-          <div className="chart-title"><Icon name="eye" size={15} /> 外观</div>
+          <div className="chart-title mt12"><Icon name="eye" size={15} /> 外观</div>
           <div className="set-row">
             <div>
               <div className="label">主题</div>
@@ -219,7 +227,7 @@ export function SettingsPage() {
         </section>
 
         {/* 测速 */}
-        <section className="card pad">
+        <section className="card pad settings-section settings-section--speed">
           <div className="chart-title"><Icon name="gauge" size={15} /> 测速</div>
           <div className="set-row">
             <div>
@@ -301,9 +309,8 @@ export function SettingsPage() {
           </div>
         </section>
 
-        {/* 监控 */}
-        <section className="card pad">
-          <div className="chart-title"><Icon name="activity" size={15} /> 监控与系统集成</div>
+        <section className="card pad settings-section settings-section--monitoring">
+          <div className="chart-title"><Icon name="activity" size={15} /> 后台监控与系统行为</div>
           <div className="set-row">
             <div>
               <div className="label">后台网络监控</div>
@@ -375,6 +382,10 @@ export function SettingsPage() {
               </select>
             </div>
           )}
+        </section>
+
+        <section className="card pad settings-section settings-section--alerts">
+          <div className="chart-title"><Icon name="activity" size={15} /> 通知、告警与指标</div>
           <div className="set-row">
             <div>
               <div className="label">桌面通知</div>
@@ -438,8 +449,64 @@ export function SettingsPage() {
           )}
         </section>
 
+        {/* 网络 */}
+        <section className="card pad settings-section settings-section--network">
+          <div className="chart-title"><Icon name="wifi" size={15} /> 网络与代理</div>
+          <div className="set-row">
+            <div>
+              <div className="label">代理模式</div>
+              <div className="desc">自动读取环境变量和 Windows Internet 设置；直连模式不会使用系统代理</div>
+            </div>
+            <select
+              className="select"
+              value={settings.proxy_mode}
+              onChange={(e) => upd({ proxy_mode: e.target.value as "auto" | "direct" | "manual" })}
+            >
+              <option value="auto">自动代理</option>
+              <option value="direct">直连</option>
+              <option value="manual">手动代理</option>
+            </select>
+          </div>
+          {settings.proxy_mode === "manual" && (
+            <div className="set-row">
+              <div>
+                <div className="label">代理地址</div>
+                <div className="desc">支持 HTTP/HTTPS 代理，例如 127.0.0.1:7890；离开输入框后保存</div>
+              </div>
+              <input
+                className="text-input settings-proxy-input"
+                value={proxyUrlDraft}
+                onChange={(e) => setProxyUrlDraft(e.target.value)}
+                onBlur={() => {
+                  if (proxyUrlDraft !== settings.proxy_url) void upd({ proxy_url: proxyUrlDraft });
+                }}
+                placeholder="http://127.0.0.1:7890"
+                aria-label="手动代理地址"
+                spellCheck={false}
+              />
+            </div>
+          )}
+          <div className="set-row">
+            <div>
+              <div className="label">代理绕过列表</div>
+              <div className="desc">可填写主机名或 IP，使用逗号、分号或空格分隔；PAC/WPAD 暂不支持</div>
+            </div>
+            <input
+              className="text-input settings-proxy-input"
+              value={proxyBypassDraft}
+              onChange={(e) => setProxyBypassDraft(e.target.value)}
+              onBlur={() => {
+                if (proxyBypassDraft !== settings.proxy_bypass) void upd({ proxy_bypass: proxyBypassDraft });
+              }}
+              placeholder="localhost, 127.0.0.1"
+              aria-label="代理绕过列表"
+              spellCheck={false}
+            />
+          </div>
+        </section>
+
         {/* 隐私 */}
-        <section className="card pad">
+        <section className="card pad settings-section settings-section--privacy">
           <div className="chart-title"><Icon name="shield" size={15} /> 隐私与数据</div>
           <div className="set-row">
             <div>
@@ -501,7 +568,7 @@ export function SettingsPage() {
         </section>
 
         {/* 关于 */}
-        <section className="card pad about-card">
+        <section className="card pad about-card settings-section settings-section--about">
           <div className="chart-title"><Icon name="info" size={15} /> 关于</div>
           <div className="row gap12 mt8">
             <div className="brand-logo" style={{ width: 44, height: 44 }}>

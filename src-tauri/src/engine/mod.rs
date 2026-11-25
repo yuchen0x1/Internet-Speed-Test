@@ -28,6 +28,7 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics;
+use crate::network::ProxyPolicy;
 use crate::settings::AppSettings;
 use crate::storage::Storage;
 use adapter::ThroughputCounters;
@@ -86,6 +87,28 @@ pub struct SpeedTestEngine {
     phase: Mutex<TestPhase>,
 }
 
+struct RunningReset<'a> {
+    engine: &'a SpeedTestEngine,
+    token: CancellationToken,
+}
+
+impl<'a> RunningReset<'a> {
+    fn new(engine: &'a SpeedTestEngine, token: CancellationToken) -> Self {
+        Self { engine, token }
+    }
+}
+
+impl Drop for RunningReset<'_> {
+    fn drop(&mut self) {
+        // A dropped/aborted run may have detached sampler tasks that hold child
+        // tokens. Cancel before releasing the running state so those tasks exit.
+        self.token.cancel();
+        *crate::safe_lock::lock(&self.engine.cancel_token) = None;
+        *crate::safe_lock::lock(&self.engine.phase) = TestPhase::Idle;
+        self.engine.running.store(false, Ordering::SeqCst);
+    }
+}
+
 impl Default for SpeedTestEngine {
     fn default() -> Self {
         Self::new()
@@ -137,11 +160,8 @@ impl SpeedTestEngine {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let engine = self.clone();
         tokio::spawn(async move {
+            let _reset = RunningReset::new(&engine, cancel.clone());
             let result = engine.run_test(&sink, &settings, &storage, &cancel).await;
-            // 收尾:释放 token 与运行状态,确保可再次启动
-            *crate::safe_lock::lock(&engine.cancel_token) = None;
-            *crate::safe_lock::lock(&engine.phase) = TestPhase::Idle;
-            engine.running.store(false, Ordering::SeqCst);
             let _ = tx.send(result);
         });
         Ok(rx)
@@ -172,7 +192,26 @@ impl SpeedTestEngine {
         settings: AppSettings,
         storage: Arc<Storage>,
     ) -> TestResult {
-        let token = CancellationToken::new();
+        let Some(token) = self.try_activate() else {
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            let mut result = TestResult {
+                id: util::short_id(),
+                started_at: now.clone(),
+                finished_at: now,
+                status: "failed".into(),
+                error: Some("测速任务正在进行中".into()),
+                ..Default::default()
+            };
+            result.duration_ms = 0;
+            sink.emit(EngineEvent::Failed {
+                error: "测速任务正在进行中".into(),
+            });
+            sink.emit(EngineEvent::Finished {
+                result: Box::new(result.clone()),
+            });
+            return result;
+        };
+        let _reset = RunningReset::new(self, token.clone());
         self.run_test(&sink, &settings, &storage, &token).await
     }
 
@@ -227,9 +266,36 @@ impl SpeedTestEngine {
                 .push("精度模式:样本密度与并发已提高".into());
         }
 
-        let outcome = self
-            .execute(sink, settings, storage, token, &mut result, &cfg, t0)
-            .await;
+        let registry = match ProxyPolicy::from_parts(
+            &settings.proxy_mode,
+            &settings.proxy_url,
+            &settings.proxy_bypass,
+        ) {
+            Ok(policy) => Some(Arc::new(ServerRegistry::with_policy(policy))),
+            Err(error) => {
+                result.error = Some(format!("代理配置无效: {error}"));
+                None
+            }
+        };
+        let outcome = match registry.as_ref() {
+            Some(registry) => {
+                self.execute(
+                    sink,
+                    settings,
+                    storage,
+                    token,
+                    registry,
+                    &mut result,
+                    &cfg,
+                    t0,
+                )
+                .await
+            }
+            None => Err(result
+                .error
+                .clone()
+                .unwrap_or_else(|| "代理配置无效".into())),
+        };
 
         match outcome {
             Ok(true) => {
@@ -246,7 +312,9 @@ impl SpeedTestEngine {
                 result.error = Some(err);
                 // 失败时丢弃可重新发现的节点缓存:NDT7 社区节点可能已下线,
                 // 下次测速应重新走 Locate 而不是复用同一个死节点。
-                self.registry.invalidate_discovery();
+                if let Some(registry) = registry.as_ref() {
+                    registry.invalidate_discovery();
+                }
             }
         }
         result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -281,6 +349,7 @@ impl SpeedTestEngine {
         settings: &AppSettings,
         storage: &Arc<Storage>,
         token: &CancellationToken,
+        registry: &Arc<ServerRegistry>,
         result: &mut TestResult,
         cfg: &EngineConfig,
         t0: Instant,
@@ -301,17 +370,18 @@ impl SpeedTestEngine {
         // ---------- 节点选择 ----------
         self.set_phase(sink, TestPhase::Preparing, "正在获取测速节点列表");
         let favorites = storage.favorites_map();
-        let nodes = self
-            .registry
-            .list_servers(&settings.custom_nodes, &favorites)
-            .await;
+        let nodes = tokio::select! {
+            _ = token.cancelled() => return Ok(false),
+            nodes = registry.list_servers(&settings.custom_nodes, &favorites) => nodes,
+        };
         if token.is_cancelled() {
             return Ok(false);
         }
 
-        let node: ServerNodeInfo = if cfg.auto_select {
+        let mut fallback_nodes: Vec<ServerNodeInfo> = Vec::new();
+        let mut node: ServerNodeInfo = if cfg.auto_select {
             self.set_phase(sink, TestPhase::Preparing, "正在探测节点并自动优选");
-            let (chosen, probes) = self.registry.auto_select(&nodes, token).await;
+            let (chosen, probes) = registry.auto_select(&nodes, token).await;
             sink.emit_raw(
                 "servers://probed",
                 probes
@@ -323,6 +393,32 @@ impl SpeedTestEngine {
                     })
                     .collect::<Vec<_>>(),
             );
+            if token.is_cancelled() {
+                return Ok(false);
+            }
+            fallback_nodes = probes
+                .iter()
+                .filter(|p| p.alive)
+                .map(|p| p.node.clone())
+                .collect();
+            fallback_nodes.sort_by(|a, b| {
+                let a_latency = probes
+                    .iter()
+                    .find(|p| p.node.id == a.id)
+                    .and_then(|p| p.latency_ms)
+                    .unwrap_or(f64::INFINITY);
+                let b_latency = probes
+                    .iter()
+                    .find(|p| p.node.id == b.id)
+                    .and_then(|p| p.latency_ms)
+                    .unwrap_or(f64::INFINITY);
+                a_latency
+                    .partial_cmp(&b_latency)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            // 限制故障切换预算:在线列表可能包含大量存活节点,
+            // 不能因一个阶段失败而把整张列表逐个跑完整测速。
+            fallback_nodes.truncate(4);
             match chosen {
                 Some(n) => {
                     log::info!("已自动选择测速节点(优选完成)");
@@ -354,17 +450,43 @@ impl SpeedTestEngine {
             return Ok(false);
         }
         result.server = Some(node.clone());
-        sink.emit(EngineEvent::Server { node: node.clone() });
 
         // 连通性确认
-        self.registry
-            .ping_node(&node, token)
-            .await
-            .map_err(|e| format!("测速节点连通性检查失败: {e}"))?;
+        if let Err(first_error) = registry.ping_node(&node, token).await {
+            if !cfg.auto_select {
+                return connectivity_failure(
+                    token,
+                    format!("测速节点连通性检查失败: {first_error}"),
+                );
+            }
+            let mut switched = None;
+            for candidate in fallback_nodes
+                .iter()
+                .filter(|candidate| candidate.id != node.id)
+                .take(1)
+            {
+                if token.is_cancelled() {
+                    continue;
+                }
+                if registry.ping_node(candidate, token).await.is_ok() {
+                    switched = Some(candidate.clone());
+                    break;
+                }
+            }
+            let Some(candidate) = switched else {
+                return connectivity_failure(
+                    token,
+                    format!("测速节点连通性检查失败: {first_error}"),
+                );
+            };
+            node = candidate;
+            result.server = Some(node.clone());
+        }
+        sink.emit(EngineEvent::Server { node: node.clone() });
 
         // 公网 IP(仅当用户授权显示时获取)
         if settings.show_public_ip {
-            if let Some((ip, isp)) = self.registry.node_ip_info(&node, token).await {
+            if let Some((ip, isp)) = registry.node_ip_info(&node, token).await {
                 result.public_ip = Some(ip);
                 result.isp = isp;
             }
@@ -373,51 +495,124 @@ impl SpeedTestEngine {
         // ---------- 阶段二:延迟测试 ----------
         self.set_phase(sink, TestPhase::Latency, "正在测量网络延迟");
         let ping_count = if cfg.precision { 16 } else { 10 };
-        let mut rtts: Vec<f64> = Vec::with_capacity(ping_count);
-        for i in 0..ping_count {
-            if token.is_cancelled() {
-                return Ok(false);
-            }
-            sink.emit(EngineEvent::Progress {
-                percent: (i as f32 / ping_count as f32) * 100.0,
-            });
-            match self.registry.ping_node(&node, token).await {
-                Ok(rtt) => {
-                    rtts.push(rtt);
-                    result
-                        .latency_samples
-                        .push([t0.elapsed().as_millis() as f64, rtt]);
-                    sink.emit(EngineEvent::Latency { rtt_ms: rtt });
+        let mut latency = self
+            .measure_latency_phase(sink, registry, &node, ping_count, token, t0)
+            .await?;
+        if latency.is_none() && token.is_cancelled() {
+            return Ok(false);
+        }
+        if latency.is_none() && cfg.auto_select {
+            for candidate in fallback_nodes
+                .iter()
+                .filter(|candidate| candidate.id != node.id)
+                .take(1)
+            {
+                if token.is_cancelled() {
+                    continue;
                 }
-                Err(_) => { /* 单次失败跳过 */ }
+                if registry.ping_node(candidate, token).await.is_err() {
+                    continue;
+                }
+                sink.emit(EngineEvent::Server {
+                    node: candidate.clone(),
+                });
+                if let Some(candidate_latency) = self
+                    .measure_latency_phase(sink, registry, candidate, ping_count, token, t0)
+                    .await?
+                {
+                    node = candidate.clone();
+                    result.server = Some(node.clone());
+                    sink.emit(EngineEvent::Server { node: node.clone() });
+                    latency = Some(candidate_latency);
+                    break;
+                }
             }
-            tokio::time::sleep(Duration::from_millis(350)).await;
         }
-        if rtts.is_empty() {
+        if token.is_cancelled() {
+            return Ok(false);
+        }
+        let Some((latency_samples, idle_ping, ping_min, ping_max)) = latency else {
             return Err("延迟测试失败:所有测量请求均超时或被拒绝".into());
-        }
-        let mut sorted_rtts = rtts.clone();
-        result.idle_ping_ms = quality::median(&mut sorted_rtts);
-        result.ping_min_ms = rtts.iter().cloned().fold(f64::MAX, f64::min);
-        result.ping_max_ms = rtts.iter().cloned().fold(0.0, f64::max);
+        };
+        result.latency_samples = latency_samples;
+        result.idle_ping_ms = idle_ping;
+        result.ping_min_ms = ping_min;
+        result.ping_max_ms = ping_max;
 
         // ---------- 阶段三:下载测试 ----------
         self.set_phase(sink, TestPhase::Download, "正在执行下载测速");
-        let dl = self
+        let mut down_samples = Vec::new();
+        let mut dl = self
             .run_throughput_phase(
                 sink,
+                registry,
                 &node,
                 "download",
                 cfg.down_streams,
                 cfg.duration_secs,
                 cfg.precision,
                 token,
-                &mut result.down_samples,
+                &mut down_samples,
             )
             .await;
+        let mut down_failures = 0;
+        if matches!(&dl, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
+            for candidate in fallback_nodes
+                .iter()
+                .filter(|candidate| candidate.id != node.id)
+                .take(1)
+            {
+                if token.is_cancelled() {
+                    continue;
+                }
+                if registry.ping_node(candidate, token).await.is_err() {
+                    continue;
+                }
+                sink.emit(EngineEvent::Server {
+                    node: candidate.clone(),
+                });
+                let Some(candidate_latency) = self
+                    .measure_latency_phase(sink, registry, candidate, ping_count, token, t0)
+                    .await?
+                else {
+                    continue;
+                };
+                let mut candidate_samples = Vec::new();
+                let candidate_dl = self
+                    .run_throughput_phase(
+                        sink,
+                        registry,
+                        candidate,
+                        "download",
+                        cfg.down_streams,
+                        cfg.duration_secs,
+                        cfg.precision,
+                        token,
+                        &mut candidate_samples,
+                    )
+                    .await;
+                if matches!(&candidate_dl, PhaseOutcome::Ok(bytes, ..) if *bytes > 0) {
+                    node = candidate.clone();
+                    result.server = Some(node.clone());
+                    sink.emit(EngineEvent::Server { node: node.clone() });
+                    result.latency_samples = candidate_latency.0;
+                    result.idle_ping_ms = candidate_latency.1;
+                    result.ping_min_ms = candidate_latency.2;
+                    result.ping_max_ms = candidate_latency.3;
+                    down_samples = candidate_samples;
+                    dl = candidate_dl;
+                    break;
+                }
+            }
+        }
+        if token.is_cancelled() {
+            return Ok(false);
+        }
         match dl {
             PhaseOutcome::Ok(bytes, failures, loaded, warmup_bytes) => {
                 result.http_failures += failures;
+                down_failures = failures;
+                result.down_samples = down_samples;
                 result.loaded_down_ms = loaded;
                 result.download_mbps = quality::stable_window_mbps(
                     bytes,
@@ -438,21 +633,112 @@ impl SpeedTestEngine {
 
         // ---------- 阶段四:上传测试 ----------
         self.set_phase(sink, TestPhase::Upload, "正在执行上传测速");
-        let ul = self
+        let mut up_samples = Vec::new();
+        let mut ul = self
             .run_throughput_phase(
                 sink,
+                registry,
                 &node,
                 "upload",
                 cfg.up_streams,
                 cfg.duration_secs,
                 cfg.precision,
                 token,
-                &mut result.up_samples,
+                &mut up_samples,
             )
             .await;
+        if matches!(&ul, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
+            for candidate in &fallback_nodes {
+                if candidate.id == node.id || token.is_cancelled() {
+                    continue;
+                }
+                if registry.ping_node(candidate, token).await.is_err() {
+                    continue;
+                }
+                sink.emit(EngineEvent::Server {
+                    node: candidate.clone(),
+                });
+                let Some(candidate_latency) = self
+                    .measure_latency_phase(sink, registry, candidate, ping_count, token, t0)
+                    .await?
+                else {
+                    continue;
+                };
+                let mut candidate_down_samples = Vec::new();
+                let candidate_dl = self
+                    .run_throughput_phase(
+                        sink,
+                        registry,
+                        candidate,
+                        "download",
+                        cfg.down_streams,
+                        cfg.duration_secs,
+                        cfg.precision,
+                        token,
+                        &mut candidate_down_samples,
+                    )
+                    .await;
+                let PhaseOutcome::Ok(
+                    download_bytes,
+                    download_failures,
+                    loaded_down,
+                    download_warmup_bytes,
+                ) = candidate_dl
+                else {
+                    continue;
+                };
+                if download_bytes == 0 {
+                    continue;
+                }
+                let mut candidate_samples = Vec::new();
+                let candidate_ul = self
+                    .run_throughput_phase(
+                        sink,
+                        registry,
+                        candidate,
+                        "upload",
+                        cfg.up_streams,
+                        cfg.duration_secs,
+                        cfg.precision,
+                        token,
+                        &mut candidate_samples,
+                    )
+                    .await;
+                if matches!(&candidate_ul, PhaseOutcome::Ok(bytes, ..) if *bytes > 0) {
+                    node = candidate.clone();
+                    result.server = Some(node.clone());
+                    result.latency_samples = candidate_latency.0;
+                    result.idle_ping_ms = candidate_latency.1;
+                    result.ping_min_ms = candidate_latency.2;
+                    result.ping_max_ms = candidate_latency.3;
+                    // 上传切换代表采用备用节点的完整结果，不能混合首选节点的下载与
+                    // 备用节点的上传数据。只有备用节点双向阶段都成功才整体替换。
+                    result.http_failures = result
+                        .http_failures
+                        .saturating_sub(down_failures)
+                        .saturating_add(download_failures);
+                    result.down_samples = candidate_down_samples;
+                    result.download_mbps = quality::stable_window_mbps(
+                        download_bytes,
+                        cfg.duration_secs as f64 * 1000.0,
+                        WARMUP_MS,
+                        download_warmup_bytes,
+                    );
+                    result.download_peak_mbps = quality::peak_from_samples(&result.down_samples);
+                    result.loaded_down_ms = loaded_down;
+                    up_samples = candidate_samples;
+                    ul = candidate_ul;
+                    break;
+                }
+            }
+        }
+        if token.is_cancelled() {
+            return Ok(false);
+        }
         match ul {
             PhaseOutcome::Ok(bytes, failures, loaded, warmup_bytes) => {
                 result.http_failures += failures;
+                result.up_samples = up_samples;
                 result.loaded_up_ms = loaded;
                 if bytes == 0 {
                     // 上传失败不终止整体测试,如实标注
@@ -483,7 +769,10 @@ impl SpeedTestEngine {
         // ICMP 丢包:对测速服务器主机真实 ping(10 包);被禁 ping 则如实标注
         if let Some(server) = &result.server {
             if let Some(host) = util::extract_host(&server.base_url) {
-                let ping_out = diagnostics::icmp_ping(&host, 10, 1500).await;
+                let ping_out = diagnostics::icmp_ping_cancellable(&host, 10, 1500, token).await;
+                if token.is_cancelled() {
+                    return Ok(false);
+                }
                 result.packet_loss_percent = ping_out.loss_percent;
             }
         }
@@ -491,11 +780,52 @@ impl SpeedTestEngine {
         Ok(true)
     }
 
+    async fn measure_latency_phase(
+        &self,
+        sink: &EventSink,
+        registry: &Arc<ServerRegistry>,
+        node: &ServerNodeInfo,
+        ping_count: usize,
+        token: &CancellationToken,
+        t0: Instant,
+    ) -> Result<Option<(Vec<[f64; 2]>, f64, f64, f64)>, String> {
+        let mut rtts = Vec::with_capacity(ping_count);
+        let mut samples = Vec::with_capacity(ping_count);
+        for i in 0..ping_count {
+            if token.is_cancelled() {
+                return Ok(None);
+            }
+            sink.emit(EngineEvent::Progress {
+                percent: (i as f32 / ping_count as f32) * 100.0,
+            });
+            if let Ok(rtt) = registry.ping_node(node, token).await {
+                rtts.push(rtt);
+                samples.push([t0.elapsed().as_millis() as f64, rtt]);
+                sink.emit(EngineEvent::Latency { rtt_ms: rtt });
+            }
+            tokio::select! {
+                _ = token.cancelled() => return Ok(None),
+                _ = tokio::time::sleep(Duration::from_millis(350)) => {}
+            }
+        }
+        if rtts.is_empty() {
+            return Ok(None);
+        }
+        let mut sorted = rtts.clone();
+        Ok(Some((
+            samples,
+            quality::median(&mut sorted),
+            rtts.iter().copied().fold(f64::INFINITY, f64::min),
+            rtts.iter().copied().fold(0.0, f64::max),
+        )))
+    }
+
     /// 执行一个吞吐阶段(下载或上传),管理采样器 / 负载延迟探测 / 看门狗
     #[allow(clippy::too_many_arguments)]
     async fn run_throughput_phase(
         &self,
         sink: &EventSink,
+        registry: &Arc<ServerRegistry>,
         node: &ServerNodeInfo,
         direction: &str,
         streams: usize,
@@ -531,7 +861,7 @@ impl SpeedTestEngine {
 
         // 负载延迟探测(每 500ms 一次)
         let loaded_handle = {
-            let registry = self.registry.clone();
+            let registry = registry.clone();
             let node = node.clone();
             let loaded = loaded.clone();
             let sink = sink.clone();
@@ -542,7 +872,7 @@ impl SpeedTestEngine {
             })
         };
 
-        let adapter = self.registry.adapter_dyn(node);
+        let adapter = registry.adapter_dyn(node);
         let cfg_phase = adapter::PhaseConfig {
             duration,
             streams: if precision { streams + 2 } else { streams },
@@ -600,6 +930,14 @@ enum PhaseOutcome {
     Ok(u64, u32, Option<f64>, u64),
     Cancelled,
     Failed(String),
+}
+
+fn connectivity_failure(token: &CancellationToken, error: String) -> Result<bool, String> {
+    if token.is_cancelled() {
+        Ok(false)
+    } else {
+        Err(error)
+    }
 }
 
 /// 手动指定节点不在列表中时的兜底:仅接受合法 HTTPS URL,按 LibreSpeed 默认端点构造。
@@ -731,13 +1069,39 @@ mod tests {
     fn test_double_start_rejected() {
         let engine = SpeedTestEngine::new();
         assert!(!engine.is_running());
-        assert!(
-            engine.try_activate().is_some(),
-            "首次激活应成功并写入取消 token"
-        );
+        let token = engine
+            .try_activate()
+            .expect("首次激活应成功并写入取消 token");
         assert!(engine.is_running(), "激活后应处于运行状态");
         assert!(engine.try_activate().is_none(), "运行中重复激活必须被拒绝");
         // stop 只取消当前 token;运行标志由 run_test 收尾复位,测试中不触发
         engine.stop();
+        assert!(token.is_cancelled(), "stop 必须取消本轮测速令牌");
+    }
+
+    #[test]
+    fn test_cancelled_connectivity_failure_is_not_reported_as_failed() {
+        let token = CancellationToken::new();
+        assert_eq!(
+            connectivity_failure(&token, "节点不可达".into()),
+            Err("节点不可达".into())
+        );
+
+        token.cancel();
+        assert_eq!(connectivity_failure(&token, "请求已取消".into()), Ok(false));
+    }
+
+    #[test]
+    fn test_running_reset_cancels_children_and_releases_engine() {
+        let engine = SpeedTestEngine::new();
+        let token = engine.try_activate().expect("本轮测速应取得引擎运行权");
+        *crate::safe_lock::lock(&engine.phase) = TestPhase::Download;
+
+        drop(RunningReset::new(&engine, token.clone()));
+
+        assert!(token.is_cancelled());
+        assert!(!engine.is_running());
+        assert_eq!(engine.current_phase(), TestPhase::Idle);
+        assert!(crate::safe_lock::lock(&engine.cancel_token).is_none());
     }
 }

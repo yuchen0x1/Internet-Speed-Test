@@ -18,6 +18,7 @@ pub struct ChunkedBody {
     granularity: usize,
     counters: Arc<ThroughputCounters>,
     token: CancellationToken,
+    count_immediately: bool,
     finished: bool,
 }
 
@@ -28,6 +29,25 @@ impl ChunkedBody {
         counters: Arc<ThroughputCounters>,
         token: CancellationToken,
     ) -> Self {
+        Self::build(pool, total_len, counters, token, true)
+    }
+
+    pub fn new_untracked(
+        pool: Vec<u8>,
+        total_len: usize,
+        counters: Arc<ThroughputCounters>,
+        token: CancellationToken,
+    ) -> Self {
+        Self::build(pool, total_len, counters, token, false)
+    }
+
+    fn build(
+        pool: Vec<u8>,
+        total_len: usize,
+        counters: Arc<ThroughputCounters>,
+        token: CancellationToken,
+        count_immediately: bool,
+    ) -> Self {
         Self {
             pool: Arc::new(pool),
             offset: 0,
@@ -35,6 +55,7 @@ impl ChunkedBody {
             granularity: 64 * 1024,
             counters,
             token,
+            count_immediately,
             finished: false,
         }
     }
@@ -50,7 +71,9 @@ impl ChunkedBody {
             self.offset = end;
             self.remaining -= take;
             let slice = &self.pool[start..end];
-            self.counters.add_bytes(slice.len() as u64);
+            if self.count_immediately {
+                self.counters.add_bytes(slice.len() as u64);
+            }
             Some(slice)
         } else {
             // 跨池尾:先产出池尾剩余部分,下一拍回卷到开头
@@ -58,7 +81,9 @@ impl ChunkedBody {
             self.offset = 0;
             self.remaining -= first;
             let slice = &self.pool[start..];
-            self.counters.add_bytes(slice.len() as u64);
+            if self.count_immediately {
+                self.counters.add_bytes(slice.len() as u64);
+            }
             Some(slice)
         }
     }

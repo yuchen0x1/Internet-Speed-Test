@@ -12,7 +12,10 @@ use super::model::ServerNodeInfo;
 /// 吞吐计数器(多流共享,原子累加)
 #[derive(Debug, Default)]
 pub struct ThroughputCounters {
+    /// 客户端已从请求体读取并交给 HTTP 栈的字节数。
     pub total_bytes: AtomicU64,
+    /// 服务端返回成功状态后确认接受的上传字节数。
+    pub accepted_bytes: AtomicU64,
     /// 吞吐阶段 HTTP 请求失败次数(与 ICMP 丢包严格区分)
     pub failures: AtomicU32,
 }
@@ -23,6 +26,16 @@ impl ThroughputCounters {
     }
     pub fn total(&self) -> u64 {
         self.total_bytes.load(Ordering::Relaxed)
+    }
+    pub fn add_accepted(&self, n: u64) {
+        self.accepted_bytes.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn commit_accepted(&self, n: u64) {
+        self.add_accepted(n);
+        self.add_bytes(n);
+    }
+    pub fn accepted(&self) -> u64 {
+        self.accepted_bytes.load(Ordering::Relaxed)
     }
     pub fn add_failure(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
@@ -94,7 +107,9 @@ pub async fn measure_http_rtt(
         .timeout(Duration::from_secs(4))
         .send();
     let resp = match token.run_until_cancelled(fut).await {
-        Some(r) => r.map_err(|e| format!("请求失败: {e}"))?,
+        Some(r) => {
+            r.map_err(|e| format!("请求失败: {}", crate::network::redact_error(&e.to_string())))?
+        }
         None => return Err("已取消".into()),
     };
     if !resp.status().is_success() {

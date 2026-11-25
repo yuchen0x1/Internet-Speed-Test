@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::engine::quality::{
     jitter_ms as calc_jitter, parse_ping_output, parse_traceroute_output, PingOutput, TraceHop,
 };
+use crate::network::ProxyPolicy;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -337,6 +338,20 @@ pub async fn icmp_ping(host: &str, count: u32, timeout_ms: u32) -> PingOutput {
         return out;
     }
     icmp_ping_subprocess(host, count, timeout_ms).await
+}
+
+/// 引擎质量阶段使用可取消的进程实现。`kill_on_drop` 会在取消时终止
+/// 系统 ping 子进程，避免停止测速后继续等待完整探测轮次。
+pub async fn icmp_ping_cancellable(
+    host: &str,
+    count: u32,
+    timeout_ms: u32,
+    token: &tokio_util::sync::CancellationToken,
+) -> PingOutput {
+    tokio::select! {
+        _ = token.cancelled() => PingOutput { loss_percent: None, rtts_ms: vec![], avg_ms: None },
+        result = icmp_ping_subprocess(host, count, timeout_ms) => result,
+    }
 }
 
 /// IcmpSendEcho 实现(同步 API 放入阻塞线程池)
@@ -821,13 +836,17 @@ pub struct HttpsResult {
     pub error: Option<String>,
 }
 
-pub async fn https_test(url: &str) -> HttpsResult {
-    let client = reqwest::Client::builder()
-        .user_agent(format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(8))
-        .no_proxy()
-        .build();
+pub async fn https_test(url: &str, policy: &ProxyPolicy) -> HttpsResult {
+    let client = policy
+        .client_builder(
+            &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
+            Duration::from_secs(5),
+        )
+        .and_then(|b| {
+            b.timeout(Duration::from_secs(8))
+                .build()
+                .map_err(|e| crate::network::redact_error(&e.to_string()))
+        });
     let base = HttpsResult {
         url: url.into(),
         ok: false,
@@ -850,7 +869,7 @@ pub async fn https_test(url: &str) -> HttpsResult {
                     ..base
                 },
                 Err(e) => HttpsResult {
-                    error: Some(format!("{e}")),
+                    error: Some(crate::network::redact_error(&e.to_string())),
                     ..base
                 },
             }
@@ -864,33 +883,45 @@ pub struct IpVersionCheck {
     /// 仅在 show_public_ip 授权时返回
     pub public_address: Option<String>,
     pub error: Option<String>,
+    pub note: Option<String>,
 }
 
-fn plain_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .user_agent(format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(Duration::from_secs(4))
+fn plain_client(policy: &ProxyPolicy) -> Result<reqwest::Client, String> {
+    policy
+        .client_builder(
+            &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
+            Duration::from_secs(4),
+        )
+        .map_err(|e| e.to_string())?
         .timeout(Duration::from_secs(6))
-        .no_proxy()
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(|e| crate::network::redact_error(&e.to_string()))
 }
 
-async fn fetch_first_line(url: &str) -> Result<String, String> {
-    let c = plain_client()?;
-    let r = c.get(url).send().await.map_err(|e| e.to_string())?;
+async fn fetch_first_line(url: &str, policy: &ProxyPolicy) -> Result<String, String> {
+    let c = plain_client(policy)?;
+    let r = c
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| crate::network::redact_error(&e.to_string()))?;
     if !r.status().is_success() {
         return Err(format!("HTTP {}", r.status().as_u16()));
     }
-    let t = r.text().await.map_err(|e| e.to_string())?;
+    let t = r
+        .text()
+        .await
+        .map_err(|e| crate::network::redact_error(&e.to_string()))?;
     Ok(t.lines().next().unwrap_or("").trim().to_string())
 }
 
 /// IPv6 可用性(独立于授权:始终检测;地址受授权控制)
-pub async fn ipv6_check(show_public_ip: bool) -> IpVersionCheck {
+pub async fn ipv6_check(show_public_ip: bool, policy: &ProxyPolicy) -> IpVersionCheck {
+    let note = (!policy.is_direct_route())
+        .then(|| "代理配置可能使结果反映代理出口,不一定代表本机直连 IPv6".to_string());
     match tokio::time::timeout(
         Duration::from_secs(7),
-        fetch_first_line("https://ipv6.icanhazip.com"),
+        fetch_first_line("https://ipv6.icanhazip.com", policy),
     )
     .await
     {
@@ -898,16 +929,19 @@ pub async fn ipv6_check(show_public_ip: bool) -> IpVersionCheck {
             available: true,
             public_address: show_public_ip.then_some(addr),
             error: None,
+            note,
         },
         Ok(Err(e)) => IpVersionCheck {
             available: false,
             public_address: None,
             error: Some(e),
+            note,
         },
         Ok(Ok(_)) | Err(_) => IpVersionCheck {
             available: false,
             public_address: None,
             error: Some("IPv6 连接超时或不可用".into()),
+            note,
         },
     }
 }
@@ -920,10 +954,12 @@ pub struct PublicInfo {
     pub isp: Option<String>,
     pub edge_colo: Option<String>,
     pub country: Option<String>,
+    pub note: Option<String>,
+    pub error: Option<String>,
 }
 
 /// 公网信息:仅使用 Cloudflare 系端点(与测速流量同源,隐私策略一致)
-pub async fn public_info(show_public_ip: bool) -> PublicInfo {
+pub async fn public_info(show_public_ip: bool, policy: &ProxyPolicy) -> PublicInfo {
     if !show_public_ip {
         return PublicInfo {
             allowed: false,
@@ -932,8 +968,11 @@ pub async fn public_info(show_public_ip: bool) -> PublicInfo {
             isp: None,
             edge_colo: None,
             country: None,
+            note: None,
+            error: None,
         };
     }
+    let mut errors = Vec::new();
     let mut info = PublicInfo {
         allowed: true,
         ipv4: None,
@@ -941,33 +980,47 @@ pub async fn public_info(show_public_ip: bool) -> PublicInfo {
         isp: None,
         edge_colo: None,
         country: None,
+        note: (!policy.is_direct_route())
+            .then(|| "当前使用代理，公网地址可能反映代理出口".to_string()),
+        error: None,
     };
     // trace: ip / colo / loc(完整多行抓取)
-    if let Ok(c) = plain_client() {
-        if let Ok(r) = c
+    match plain_client(policy) {
+        Ok(c) => match c
             .get("https://speed.cloudflare.com/cdn-cgi/trace")
             .timeout(Duration::from_secs(6))
             .send()
             .await
         {
-            if let Ok(text) = r.text().await {
-                for line in text.lines() {
-                    if let Some(v) = line.strip_prefix("ip=") {
-                        info.ipv4 = Some(v.trim().to_string());
-                    } else if let Some(v) = line.strip_prefix("colo=") {
-                        info.edge_colo = Some(v.trim().to_string());
-                    } else if let Some(v) = line.strip_prefix("loc=") {
-                        info.country = Some(v.trim().to_string());
+            Ok(r) if !r.status().is_success() => {
+                errors.push(format!("公网信息服务 HTTP {}", r.status().as_u16()));
+            }
+            Ok(r) => match r.text().await {
+                Ok(text) => {
+                    for line in text.lines() {
+                        if let Some(v) = line.strip_prefix("ip=") {
+                            info.ipv4 = Some(v.trim().to_string());
+                        } else if let Some(v) = line.strip_prefix("colo=") {
+                            info.edge_colo = Some(v.trim().to_string());
+                        } else if let Some(v) = line.strip_prefix("loc=") {
+                            info.country = Some(v.trim().to_string());
+                        }
                     }
                 }
-            }
-        }
+                Err(e) => errors.push(crate::network::redact_error(&e.to_string())),
+            },
+            Err(e) => errors.push(crate::network::redact_error(&e.to_string())),
+        },
+        Err(e) => errors.push(e),
     }
     // IPv6
-    if let Ok(addr) = fetch_first_line("https://ipv6.icanhazip.com").await {
-        if addr.contains(':') {
-            info.ipv6 = Some(addr);
-        }
+    match fetch_first_line("https://ipv6.icanhazip.com", policy).await {
+        Ok(addr) if addr.contains(':') => info.ipv6 = Some(addr),
+        Ok(_) => errors.push("IPv6 查询服务返回了无效地址".into()),
+        Err(e) => errors.push(e),
+    }
+    if !errors.is_empty() {
+        info.error = Some(errors.join("；"));
     }
     info
 }
@@ -986,7 +1039,8 @@ pub struct ConnectivityEntry {
 }
 
 /// 常用服务连通性矩阵(TCP 443 并发探测)。
-/// 注意:无法连接可能源于本地网络策略,不代表服务本身不可用。
+/// 这是原始 TCP 直连，不经过 HTTP 代理；无法连接可能源于本地网络策略，
+/// 不代表服务本身不可用。
 pub async fn connectivity_grid() -> Vec<ConnectivityEntry> {
     use futures_util::StreamExt;
     let targets: Vec<(String, String, u16)> = vec![
@@ -1450,6 +1504,102 @@ pub async fn nat_type() -> NatReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn start_http_proxy(
+        expected_requests: usize,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(expected_requests);
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0; 1024];
+                loop {
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                requests.push(
+                    String::from_utf8_lossy(&request)
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                stream
+                    .write_all(
+                        b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        (address, task)
+    }
+
+    fn manual_proxy(address: &str) -> ProxyPolicy {
+        ProxyPolicy::from_parts("manual", &format!("http://{address}"), "").unwrap()
+    }
+
+    #[tokio::test]
+    async fn https_diagnostic_uses_the_explicit_proxy_policy() {
+        let (address, requests) = start_http_proxy(1).await;
+        let policy = manual_proxy(&address);
+
+        let result = https_test("https://example.invalid/check", &policy).await;
+        let requests = requests.await.unwrap();
+
+        assert!(!result.ok);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0], "CONNECT example.invalid:443 HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn ipv6_diagnostic_uses_the_explicit_proxy_policy() {
+        let (address, requests) = start_http_proxy(1).await;
+        let policy = manual_proxy(&address);
+
+        let result = ipv6_check(false, &policy).await;
+        let requests = requests.await.unwrap();
+
+        assert!(!result.available);
+        assert!(result.error.is_some());
+        assert!(result
+            .note
+            .as_deref()
+            .is_some_and(|s| s.contains("代理出口")));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0], "CONNECT ipv6.icanhazip.com:443 HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn public_info_uses_the_explicit_proxy_policy_and_reports_failures() {
+        let (address, requests) = start_http_proxy(2).await;
+        let policy = manual_proxy(&address);
+
+        let result = public_info(true, &policy).await;
+        let requests = requests.await.unwrap();
+
+        assert!(result.allowed);
+        assert!(result.ipv4.is_none());
+        assert!(result.error.is_some());
+        assert!(result
+            .note
+            .as_deref()
+            .is_some_and(|s| s.contains("代理出口")));
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("CONNECT speed.cloudflare.com:443"));
+        assert_eq!(requests[1], "CONNECT ipv6.icanhazip.com:443 HTTP/1.1");
+    }
 
     #[test]
     fn command_options_are_not_hosts() {

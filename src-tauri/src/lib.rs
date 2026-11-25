@@ -22,6 +22,7 @@ pub mod diagnostics;
 pub mod engine;
 #[cfg(feature = "desktop")]
 mod monitor;
+pub mod network;
 #[cfg(feature = "desktop")]
 mod pingmon;
 #[cfg(feature = "desktop")]

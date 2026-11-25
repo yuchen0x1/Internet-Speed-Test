@@ -12,6 +12,12 @@ import type { DiagRunRow, IfaceInfo, WifiDetails } from "../types";
 type Status = "ok" | "err" | "warn" | "unknown" | "running";
 
 const KIND_LABEL: Record<string, string> = {
+  dns: "DNS 解析",
+  gateway: "默认网关",
+  tcp: "TCP 连接",
+  https: "HTTPS 连接",
+  ipv6: "IPv6 可用性",
+  connectivity: "服务连通性",
   ping: "Ping",
   traceroute: "路由追踪",
   route_quality: "路由质量",
@@ -103,11 +109,11 @@ export function DiagnosticsPage() {
   }, []);
 
   // 各检测项一行接入:run/running 由 useDiagTask 统一管理,行为与原逐项实现一致
-  const dnsTask = useDiagTask({ running: dnsRun, setRunning: setDnsRun, setResult: setDns, exec: () => api.diagDns() });
-  const gwTask = useDiagTask({ running: gwRun, setRunning: setGwRun, setResult: setGw, exec: () => api.diagGateway() });
-  const tcpTask = useDiagTask({ running: tcpRun, setRunning: setTcpRun, setResult: setTcp, exec: () => api.diagTcp() });
-  const httpsTask = useDiagTask({ running: httpsRun, setRunning: setHttpsRun, setResult: setHttps, exec: () => api.diagHttps() });
-  const v6Task = useDiagTask({ running: v6Run, setRunning: setV6Run, setResult: setV6, exec: () => api.diagIpv6() });
+  const dnsTask = useDiagTask({ running: dnsRun, setRunning: setDnsRun, setResult: setDns, clearFirst: true, exec: () => api.diagDns() });
+  const gwTask = useDiagTask({ running: gwRun, setRunning: setGwRun, setResult: setGw, clearFirst: true, exec: () => api.diagGateway() });
+  const tcpTask = useDiagTask({ running: tcpRun, setRunning: setTcpRun, setResult: setTcp, clearFirst: true, exec: () => api.diagTcp() });
+  const httpsTask = useDiagTask({ running: httpsRun, setRunning: setHttpsRun, setResult: setHttps, clearFirst: true, exec: () => api.diagHttps() });
+  const v6Task = useDiagTask({ running: v6Run, setRunning: setV6Run, setResult: setV6, clearFirst: true, exec: () => api.diagIpv6() });
   const routeTask = useDiagTask({
     running: routeRun, setRunning: setRouteRun, setResult: setRoute, clearFirst: true,
     exec: () => api.diagRouteQuality(routeHost.trim(), 12, 6),
@@ -155,15 +161,20 @@ export function DiagnosticsPage() {
       { id: "grid", label: "服务连通性", run: () => executeBulkTask(setGridRun, setGrid, () => api.diagConnectivityGrid()) },
     ];
     setBatchProgress({ completed: 0, total: tasks.length, results: [], running: true });
-    const results = await runDiagnosticBatch(tasks, 3, (progress) => {
-      setBatchProgress({ ...progress, running: true });
-    });
-    const failed = results.filter((result) => !result.ok);
-    setBatchProgress({ completed: tasks.length, total: tasks.length, results, running: false });
-    if (failed.length) {
-      toast("warn", `基础诊断完成：${tasks.length - failed.length} 项成功，${failed.length} 项失败`);
-    } else {
-      toast("success", `基础诊断完成：${tasks.length} 项检查通过`);
+    try {
+      const results = await runDiagnosticBatch(tasks, 3, (progress) => {
+        setBatchProgress({ ...progress, running: true });
+      });
+      const failed = results.filter((result) => !result.ok);
+      setBatchProgress({ completed: tasks.length, total: tasks.length, results, running: false });
+      if (failed.length) {
+        toast("warn", `基础诊断完成：${tasks.length - failed.length} 项成功，${failed.length} 项失败`);
+      } else {
+        toast("success", `基础诊断完成：${tasks.length} 项检查通过`);
+      }
+    } catch (e) {
+      setBatchProgress((current) => current ? { ...current, running: false } : current);
+      toast("error", `基础诊断执行失败：${errMsg(e)}`);
     }
   };
 
@@ -265,6 +276,8 @@ export function DiagnosticsPage() {
               <ResultRow label="ISP 运营商" value={pub?.isp ?? "暂无数据(来自测速节点报告)"} />
               <ResultRow label="边缘节点 (PoP)" value={pub?.edge_colo ?? "未知"} />
               <ResultRow label="国家/地区" value={pub?.country ?? "未知"} />
+              {pub?.note && <div className="faint mt8" style={{ fontSize: 11.5 }}>{pub.note}</div>}
+              {pub?.error && <div className="chip amber mt8" style={{ whiteSpace: "normal", lineHeight: 1.5 }}>公网信息查询失败：{pub.error}</div>}
             </>
           )}
         </div>
@@ -313,7 +326,10 @@ export function DiagnosticsPage() {
 
         <ActionCard icon="globe" title="IPv6 可用性" desc="尝试通过纯 IPv6 端点建立连接" running={v6Task.running} onRun={v6Task.run} disabled={batchRunning} status={v6 ? (v6.available ? "ok" : "err") : undefined}>
           {v6 && (
-            <ResultRow label="IPv6 连接" s={v6.available ? "ok" : "err"} value={v6.available ? (v6.public_address ? `可用 · ${v6.public_address}` : "可用") : (v6.error ?? "不可用")} />
+            <>
+              <ResultRow label="IPv6 连接" s={v6.available ? "ok" : "err"} value={v6.available ? (v6.public_address ? `可用 · ${v6.public_address}` : "可用") : (v6.error ?? "不可用")} />
+              {v6.note && <div className="faint mt8" style={{ fontSize: 11.5 }}>{v6.note}</div>}
+            </>
           )}
         </ActionCard>
 
@@ -322,7 +338,7 @@ export function DiagnosticsPage() {
             <input className="text-input grow" value={routeHost} onChange={(e) => setRouteHost(e.target.value)} placeholder="目标主机" disabled={batchRunning} />
           </div>
           {route && route.hops.length > 0 && (
-            <div className="table-wrap" style={{ maxHeight: 260, overflowY: "auto" }}>
+            <div className="table-wrap">
               <table className="table">
                 <thead><tr><th>跳</th><th>IP</th><th>丢包</th><th>平均</th><th>抖动</th><th>样本</th></tr></thead>
                 <tbody>
@@ -378,7 +394,7 @@ export function DiagnosticsPage() {
           )}
         </ActionCard>
 
-        <ActionCard icon="globe" title="服务连通性矩阵" desc="并发探测常用服务 TCP 443(无法连接可能为本地网络策略,不代表服务不可用)" running={gridTask.running} onRun={gridTask.run} disabled={batchRunning}
+        <ActionCard icon="globe" title="服务连通性矩阵" desc="原始 TCP 443 直连探测,不经过 HTTP 代理;无法连接可能为本地网络策略,不代表服务不可用" running={gridTask.running} onRun={gridTask.run} disabled={batchRunning}
                     status={grid ? (grid.every((r) => r.ok) ? "ok" : grid.some((r) => r.ok) ? "warn" : "err") : undefined}>
           {grid && (
             <div className="connect-grid">
@@ -419,7 +435,7 @@ export function DiagnosticsPage() {
           </button>
         </div>
         {trace && trace.length > 0 && (
-          <div className="table-wrap mt12" style={{ maxHeight: 300, overflowY: "auto" }}>
+          <div className="table-wrap mt12">
             <table className="table">
               <thead><tr><th>跳数</th><th>IP 地址</th><th>延迟 (ms)</th><th>状态</th></tr></thead>
               <tbody>
@@ -524,7 +540,7 @@ function DiagHistoryPanel() {
             </div>
           )}
           {rows !== null && rows.length > 0 && (
-            <div className="table-wrap mt12" style={{ maxHeight: 320, overflowY: "auto" }}>
+            <div className="table-wrap mt12">
               <table className="table">
                 <thead><tr><th>时间</th><th>类型</th><th>目标</th><th>结果</th><th>摘要</th><th /></tr></thead>
                 <tbody>

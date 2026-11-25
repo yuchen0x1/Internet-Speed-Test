@@ -6,7 +6,7 @@
 
 .speedtest-grid {
   display: grid;
-  grid-template-columns: minmax(360px, 460px) 1fr;
+  grid-template-columns: minmax(300px, .9fr) minmax(0, 1.1fr);
   gap: 16px;
   align-items: stretch;
 }
@@ -97,7 +97,7 @@
 .phase-info { display: flex; gap: 8px; align-items: center; }
 
 .info-strip { font-size: 12px; }
-.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
 
 .chart-title {
   display: flex; align-items: center; gap: 8px;
@@ -137,9 +137,9 @@ html.theme-light .chart-tooltip { background: rgba(255, 255, 255, 0.96); }
 
 /* ============ 质量页 ============ */
 
-.quality-grid { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
-.quality-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.quality-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.quality-grid { display: grid; grid-template-columns: minmax(220px, .4fr) minmax(0, 1.6fr); gap: 16px; }
+.quality-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.quality-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 
 .rating-ring {
   width: 120px; height: 120px;
@@ -157,8 +157,8 @@ html.theme-light .chart-tooltip { background: rgba(255, 255, 255, 0.96); }
 
 /* ============ 诊断页 ============ */
 
-.diag-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.diag-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 16px; }
+.diag-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.diag-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 .diag-icon { color: var(--cyan); display: grid; place-items: center; margin-right: 10px; }
 .diag-row { padding: 6.5px 0; border-bottom: 1px dashed var(--border); font-size: 12.5px; gap: 8px; }
 .diag-row:last-child { border-bottom: none; }
@@ -170,7 +170,7 @@ html.theme-light .chart-tooltip { background: rgba(255, 255, 255, 0.96); }
 .table-wrap table tbody tr.selected { background: rgba(34, 211, 238, 0.08); }
 .compare-panel { border-color: rgba(34, 211, 238, 0.35); }
 .compare-grid {
-  display: grid; grid-template-columns: 140px 1fr 1fr;
+  display: grid; grid-template-columns: minmax(110px, 140px) minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px 14px;
   padding: 8px 0;
   border-bottom: 1px dashed var(--border);
@@ -186,11 +186,24 @@ html.theme-light input[type="date"] { color-scheme: light; }
 
 /* ============ 监控页 ============ */
 
-.monitor-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.monitor-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px; }
 
 /* ============ 设置页 ============ */
 
-.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.settings-section { min-width: 0; }
+.settings-section--appearance,
+.settings-section--speed,
+.settings-section--monitoring,
+.settings-section--alerts { grid-column: span 6; }
+.settings-section--network { grid-column: 1 / -1; }
+.settings-section--privacy,
+.settings-section--about { grid-column: 1 / -1; }
 .about-card { grid-column: 1 / -1; }
 
 /* 旋转动画 */
@@ -246,17 +259,30 @@ html.theme-light input[type="date"] { color-scheme: light; }
 @media (max-width: 1100px) {
   .speedtest-grid { grid-template-columns: 1fr; }
   .quality-grid { grid-template-columns: 1fr; }
-  .quality-grid2, .diag-grid, .settings-grid { grid-template-columns: 1fr; }
+  .quality-grid2, .diag-grid { grid-template-columns: 1fr; }
+  .settings-grid { grid-template-columns: 1fr; }
+  .settings-section--appearance,
+  .settings-section--speed,
+  .settings-section--network,
+  .settings-section--monitoring,
+  .settings-section--alerts,
+  .settings-section--privacy,
+  .settings-section--about { grid-column: 1 / -1; }
   .quality-metrics { grid-template-columns: repeat(2, 1fr); }
   .monitor-cards { grid-template-columns: 1fr; }
   :root { --sidebar-w: 72px; }
   .sidebar-footer { display: none; }
-  .nav-item { justify-content: center; padding: 12px; }
+  .nav-item { justify-content: center; padding: 12px; font-size: 0; }
   .nav-item { gap: 0; }
 }
 
+@media (max-width: 760px) {
+  .quality-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .quality-grid2 { grid-template-columns: 1fr; }
+}
+
 /* 历史详情回放 */
-.detail-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.detail-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .detail-metrics > div {
   display: flex; align-items: baseline; gap: 6px;
   padding: 10px 12px;
@@ -385,7 +411,7 @@ html.theme-light .glow-card.on { animation-name: glowBreathLight; }
 }
 
 /* 连通性矩阵 */
-.connect-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.connect-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
 .connect-cell {
   display: flex; flex-direction: column; gap: 3px;
   padding: 9px 11px;
@@ -403,7 +429,7 @@ html.theme-light .glow-card.on { animation-name: glowBreathLight; }
 @media (max-width: 1100px) { .connect-grid { grid-template-columns: repeat(2, 1fr); } }
 
 /* 统计卡行 */
-.stat-cards-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.stat-cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 @media (max-width: 1100px) { .stat-cards-row { grid-template-columns: repeat(2, 1fr); } }
 
 /* ============================================================
@@ -486,7 +512,7 @@ html.theme-light .flow-scan { background: radial-gradient(closest-side, rgba(8, 
 .flow-stage.upload .flow-throughput b { color: var(--purple); }
 .flow-throughput small { font-size: 10px; color: var(--text-faint); }
 
-.flow-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+.flow-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
 .flow-stats > div { padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: rgba(122, 176, 255, 0.04); }
 .flow-stats small { display: block; font-size: 10.5px; color: var(--text-faint); margin-bottom: 3px; }
 .flow-stats b { font-size: 15px; font-variant-numeric: tabular-nums; }

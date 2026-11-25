@@ -2,9 +2,19 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.15.1` 为待发布补丁；已有 GitHub Releases 的状态以各版本记录为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；旧 `v1.15.0` 当前没有上传资产，详见下方核验记录。
+`v1.15.2` 为待发布候选版本；正式发布状态以 GitHub Releases 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
+
+<a id="v1-15-2"></a>
+
+## v1.15.2 (待发布候选；2026-11-25)
+
+- 统一 HTTP 测速、节点发现与 HTTP 诊断的代理策略，支持自动、直连和手动模式；系统 PAC/WPAD 与不支持代理隧道的 NDT7 路径明确报告，不静默退回直连。
+- 修复测速阶段的取消清理、备用节点切换和节点间实时样本串流；上传速度按服务端成功响应确认的块计数，取消响应排空任务随阶段回收。
+- 重排设置与多页面内容网格，减少不均衡空白和嵌套表格滚动；诊断任务防止重复启动及过期结果覆盖。
+- 将 `url` 更新至 2.5.9、`cookie` 更新至 0.18.3，修复 2026-11 RustSec 公告，不通过忽略审计项规避。
+- 新增代理诊断、测速状态和节点样本回归测试；前端 80 项测试、类型检查、生产构建、IPC、文档、版本和依赖安全策略本地通过。Rust 测试/Clippy、Windows 桌面构建、真实桌面截图与 DPI 验收尚待 CI 和具备桌面构建工具的 Windows 环境确认，当前不得据此视为正式发布。
 
 <a id="v1-15-1"></a>
 
@@ -21,7 +31,9 @@
 
 ## v1.15.0 (2026-11-20)
 
-2026-11-20 核验：[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.0) 的 `publishedAt` 为 `2026-11-19T16:51:27Z`（北京时间 2026-11-20 00:51:27），`isDraft=false`、`isPrerelease=false`、`isImmutable=false`，上传资产数为 **0**（empty、mutable Release）。这不包含 GitHub 自动生成的源码归档，也不表示已有可下载安装包、CLI 包或更新清单。
+2026-11-20 发布时，[GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.0) 的 `publishedAt` 为 `2026-11-19T16:51:27Z`（北京时间 2026-11-20 00:51:27），`isDraft=false`、`isPrerelease=false`、`isImmutable=false`；当时尚无上传资产。
+
+2026-11-25 复核：Release 修复工作流于 2026-11-24 补回 4 个资产：`NetVision.Pro_1.15.0_x64-setup.exe`（5,689,337 字节）、对应 `.sig`、`latest.json` 和 `SHA256SUMS.txt`。安装包与签名可下载，更新清单也已发布；这不包含 GitHub 自动生成的源码归档。Release 仍为 mutable。
 
 本地与远端 `v1.15.0` tag 均指向原提交 [a0ac70d](https://github.com/yuchen0x1/Internet-Speed-Test/commit/a0ac70de06df891e414be4da53f915aad49b5db1)；该旧 tag 不包含后续 PR #16 修复，不代表 1.15.1 源码。本次准备不移动旧 tag，也不覆盖旧 Release 或其资产。
 
@@ -41,8 +53,9 @@
 
 | 版本 | 日期与状态 | 主要变化 |
 | --- | --- | --- |
+| [v1.15.2](#v1-15-2) | 2026-11-25 候选 · 待发布 | 代理与测速恢复、全局布局、依赖安全修复 |
 | [v1.15.1](#v1-15-1) | 2026-11-20 准备 · 待发布 | Windows 专用 cfg 与发布文档锚点、镜像同步修复 |
-| [v1.15.0](#v1-15-0) | 2026-11-20 · Release 已发布、无上传资产、mutable | 历史功能记录；旧 tag 不含 PR #16 修复 |
+| [v1.15.0](#v1-15-0) | 2026-11-20 发布 · 2026-11-24 补齐资产、mutable | 历史功能记录；旧 tag 不含 PR #16 修复 |
 | [v1.14.1](#v1-14-1) | 2026-11-17 · 未发布 | 自动语言选择、手动切换和核心壳层本地化 |
 | [v1.14.0](#v1-14-0) | 2026-11-16 · 本次发布 | 历史筛选、诊断编排/报告、设置备份、监控聚合/导出、CLI 与 IPC 契约、键盘与可访问性 |
 | [v1.13.0](#v1-13-0) | 2026-11-13 · 公开发布 | 拨测恢复与导出、真实包数进度、监控指标可信度 |

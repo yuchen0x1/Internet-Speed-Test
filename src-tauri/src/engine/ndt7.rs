@@ -22,6 +22,8 @@ use tokio_tungstenite::tungstenite::http::{HeaderMap, Request};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
+use crate::network::ProxyPolicy;
+
 use super::adapter::{PhaseConfig, ProviderAdapter, ThroughputCounters};
 use super::model::ServerNodeInfo;
 
@@ -36,6 +38,7 @@ const UPLOAD_POOL_BYTES: usize = 1024 * 1024;
 
 pub struct Ndt7Adapter {
     client: reqwest::Client,
+    websocket_direct_allowed: bool,
     /// 已发现的服务器 + 发现时刻(去抖:避免在 Locate API 失败时反复请求)。
     /// 必须带 TTL:社区节点会下线,永久缓存会让自动优选一直指向死节点直到重启应用。
     cached: std::sync::Mutex<Option<(ServerNodeInfo, std::time::Instant)>>,
@@ -46,15 +49,21 @@ const DISCOVERY_TTL: Duration = Duration::from_secs(600);
 
 impl Ndt7Adapter {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(6))
+        Self::with_policy(&ProxyPolicy::default())
+    }
+
+    pub fn with_policy(policy: &ProxyPolicy) -> Self {
+        let client = policy
+            .client_builder(
+                &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
+                Duration::from_secs(6),
+            )
             .timeout(Duration::from_secs(10))
-            .no_proxy()
             .build()
             .expect("构建 NDT7 HTTP 客户端失败");
         Self {
             client,
+            websocket_direct_allowed: policy.websocket_direct_allowed(),
             cached: std::sync::Mutex::new(None),
         }
     }
@@ -103,7 +112,11 @@ impl Ndt7Adapter {
                 None => continue,
             };
             let t0 = std::time::Instant::now();
-            let probe = tokio::time::timeout(Duration::from_secs(4), ws_connect(&ws, &token)).await;
+            let probe = tokio::time::timeout(
+                Duration::from_secs(4),
+                ws_connect(&ws, &token, self.websocket_direct_allowed),
+            )
+            .await;
             if let Ok(Ok(_stream)) = probe {
                 let rtt = t0.elapsed().as_secs_f64() * 1000.0;
                 let better = best.as_ref().is_none_or(|(_, b)| rtt < *b);
@@ -255,10 +268,14 @@ fn ws_request(url: &str) -> Result<Request<()>, String> {
 async fn ws_connect(
     url: &str,
     token: &CancellationToken,
+    websocket_direct_allowed: bool,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
 > {
+    if !websocket_direct_allowed {
+        return Err("当前代理模式不支持 NDT7 WebSocket 隧道".into());
+    }
     let req = ws_request(url)?;
     let fut = tokio_tungstenite::connect_async(req);
     match token.run_until_cancelled(fut).await {
@@ -283,9 +300,12 @@ impl ProviderAdapter for Ndt7Adapter {
     ) -> Result<f64, String> {
         let ws = to_ws_url(&node.download_url()).ok_or("NDT7 节点 URL 无效")?;
         let t0 = std::time::Instant::now();
-        let stream = tokio::time::timeout(Duration::from_secs(20), ws_connect(&ws, token))
-            .await
-            .map_err(|_| "WS 握手超时".to_string())??;
+        let stream = tokio::time::timeout(
+            Duration::from_secs(20),
+            ws_connect(&ws, token, self.websocket_direct_allowed),
+        )
+        .await
+        .map_err(|_| "WS 握手超时".to_string())??;
         drop(stream); // 握手完成即测得往返,立即释放连接
         Ok(t0.elapsed().as_secs_f64() * 1000.0)
     }
@@ -303,13 +323,14 @@ impl ProviderAdapter for Ndt7Adapter {
         };
         let deadline = tokio::time::Instant::now() + cfg.duration;
         let mut set = tokio::task::JoinSet::new();
+        let websocket_direct_allowed = self.websocket_direct_allowed;
         for _ in 0..cfg.streams.max(1) {
             let url = url.clone();
             let counters = counters.clone();
             let token = token.clone();
             set.spawn(async move {
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let mut ws = match ws_connect(&url, &token).await {
+                    let mut ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
                         Ok(s) => s,
                         Err(_) => {
                             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -364,6 +385,7 @@ impl ProviderAdapter for Ndt7Adapter {
         let deadline = tokio::time::Instant::now() + cfg.duration;
         let pool = Arc::new(super::util::random_block(UPLOAD_POOL_BYTES));
         let mut set = tokio::task::JoinSet::new();
+        let websocket_direct_allowed = self.websocket_direct_allowed;
         for _ in 0..cfg.streams.max(1) {
             let url = url.clone();
             let counters = counters.clone();
@@ -371,7 +393,7 @@ impl ProviderAdapter for Ndt7Adapter {
             let pool = pool.clone();
             set.spawn(async move {
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let mut ws = match ws_connect(&url, &token).await {
+                    let mut ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
                         Ok(s) => s,
                         Err(_) => {
                             tokio::time::sleep(Duration::from_millis(300)).await;

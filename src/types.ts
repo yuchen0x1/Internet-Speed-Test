@@ -216,6 +216,8 @@ export interface PublicInfo {
   isp: string | null;
   edge_colo: string | null;
   country: string | null;
+  note: string | null;
+  error: string | null;
 }
 
 export interface DnsDomainResult {
@@ -276,6 +278,7 @@ export interface IpVersionCheck {
   available: boolean;
   public_address: string | null;
   error: string | null;
+  note: string | null;
 }
 
 export interface PingReport {
@@ -298,6 +301,9 @@ export interface AppSettings {
   down_concurrency: number;
   up_concurrency: number;
   autosave_history: boolean;
+  proxy_mode: "auto" | "direct" | "manual";
+  proxy_url: string;
+  proxy_bypass: string;
   monitor_enabled: boolean;
   show_traffic: boolean;
   autostart: boolean;
