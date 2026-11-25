@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* 标签自动发布;也可手动触发做无发布 dry-run(仅构建与签名)
+# 推送 v* 标签自动发布;手动触发会构建、签名并保留 Windows 验收产物,不会发布
 on:
   push:
     tags:
@@ -144,6 +144,16 @@ jobs:
           test -s release-artifacts/latest.json
           test -s release-artifacts/SHA256SUMS.txt
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # 手动验收包短期保留,不创建正式 Release
+      - name: 保存手动验收构建产物
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-desktop-qa-${{ github.run_number }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
 
       # 仅标签触发时发布;workflow_dispatch 干跑只验证构建与签名
       - name: 发布 Release
