@@ -106,4 +106,93 @@ describe("engine events", () => {
     await useTest.getState().syncRunning();
     expect(useTest.getState()).toMatchObject({ running: true, result: null, elapsedMs: 0, downSamples: [] });
   });
+
+  it("does not show a previous result when the engine reports a standalone failure", async () => {
+    let emit!: (event: EngineEvent) => void;
+    vi.mocked(onEngineEvent).mockImplementationOnce(async (handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+    vi.mocked(onServersProbed).mockResolvedValueOnce(() => undefined);
+    await useTest.getState().bind();
+    useTest.setState({ result: { status: "completed" } as TestResult, running: true, phase: "download" });
+
+    emit({ type: "failed", error: "节点连接失败" });
+
+    expect(useTest.getState()).toMatchObject({
+      running: false,
+      phase: "finished",
+      result: null,
+      error: "节点连接失败",
+    });
+  });
+
+  it("does not show a previous result when the engine reports cancellation", async () => {
+    let emit!: (event: EngineEvent) => void;
+    vi.mocked(onEngineEvent).mockImplementationOnce(async (handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+    vi.mocked(onServersProbed).mockResolvedValueOnce(() => undefined);
+    await useTest.getState().bind();
+    useTest.setState({ result: { status: "completed" } as TestResult, running: true, phase: "upload" });
+
+    emit({ type: "cancelled" });
+
+    expect(useTest.getState()).toMatchObject({
+      running: false,
+      phase: "finished",
+      result: null,
+      message: "已取消",
+    });
+  });
+
+  it("keeps live samples scoped to the active node and reconciles final result data", async () => {
+    let emit!: (event: EngineEvent) => void;
+    vi.mocked(onEngineEvent).mockImplementationOnce(async (handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+    vi.mocked(onServersProbed).mockResolvedValueOnce(() => undefined);
+    await useTest.getState().bind();
+
+    const node = (id: string) => ({
+      id, name: id, provider: "librespeed", base_url: `https://${id}.test`,
+      dl_url: "", ul_url: "", ping_url: "", getip_url: "", location: null,
+      favorite: false, alive: null, latency_ms: null, allow_http: false,
+    } as const);
+    emit({ type: "server", node: node("first") });
+    emit({ type: "speed", direction: "download", mbps: 80, cumulative_mb: 10 });
+    emit({ type: "latency", rtt_ms: 20 });
+
+    emit({ type: "server", node: node("second") });
+    expect(useTest.getState()).toMatchObject({
+      node: { id: "second" },
+      liveDown: 0,
+      downloadedMb: 0,
+      downSamples: [],
+      upSamples: [],
+      latencySamples: [],
+    });
+
+    emit({ type: "speed", direction: "download", mbps: 50, cumulative_mb: 5 });
+    const finalNode = node("final");
+    emit({ type: "finished", result: {
+      status: "completed",
+      duration_ms: 1000,
+      error: null,
+      server: finalNode,
+      down_samples: [[0, 33]],
+      up_samples: [],
+      latency_samples: [[0, 11]],
+    } as unknown as TestResult });
+    expect(useTest.getState()).toMatchObject({
+      node: { id: "final" },
+      downSamples: [[0, 33]],
+      upSamples: [],
+      latencySamples: [[0, 11]],
+      downloadedMb: 0,
+      uploadedMb: 0,
+    });
+  });
 });

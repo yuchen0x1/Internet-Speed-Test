@@ -419,7 +419,7 @@ export function HistoryPage() {
 
       {/* 表格 */}
       <div className="card pad" style={{ padding: 0 }}>
-        <div className="table-wrap" style={{ maxHeight: "52vh", overflowY: "auto" }}>
+        <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>

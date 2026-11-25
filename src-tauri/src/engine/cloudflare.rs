@@ -13,6 +13,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::network::ProxyPolicy;
+
 use super::adapter::{
     cache_buster, measure_http_rtt, PhaseConfig, ProviderAdapter, ThroughputCounters,
 };
@@ -30,12 +32,19 @@ pub struct CloudflareAdapter {
 
 impl CloudflareAdapter {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(format!(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NetVisionPro/{}",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .connect_timeout(Duration::from_secs(8))
+        Self::with_policy(&ProxyPolicy::default())
+    }
+
+    pub fn with_policy(policy: &ProxyPolicy) -> Self {
+        let client = policy
+            .client_builder(
+                &format!(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NetVisionPro/{}",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                Duration::from_secs(8),
+            )
+            .expect("代理策略不可用")
             .default_headers({
                 let mut h = reqwest::header::HeaderMap::new();
                 h.insert(
@@ -48,7 +57,6 @@ impl CloudflareAdapter {
                 );
                 h
             })
-            .no_proxy()
             .build()
             .expect("构建 Cloudflare HTTP 客户端失败");
         Self { client }
@@ -120,18 +128,25 @@ impl ProviderAdapter for CloudflareAdapter {
                         "{CLOUDFLARE_BASE}/__down?bytes={DL_CHUNK_BYTES}&_x={}",
                         cache_buster()
                     );
-                    let resp = match client
-                        .get(&url)
-                        .timeout(Duration::from_secs(30))
-                        .send()
+                    let resp = match token
+                        .run_until_cancelled(
+                            client.get(&url).timeout(Duration::from_secs(30)).send(),
+                        )
                         .await
                     {
-                        Ok(r) if r.status().is_success() => r,
-                        _ => {
+                        Some(Ok(r)) if r.status().is_success() => r,
+                        Some(Ok(r)) => {
+                            counters.add_failure();
+                            let _ = token.run_until_cancelled(r.bytes()).await;
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            continue;
+                        }
+                        Some(Err(_)) => {
                             counters.add_failure();
                             tokio::time::sleep(Duration::from_millis(300)).await;
                             continue;
                         }
+                        None => break,
                     };
                     let stream = resp.bytes_stream();
                     futures_util::pin_mut!(stream);
@@ -176,9 +191,10 @@ impl ProviderAdapter for CloudflareAdapter {
             let token = token.clone();
             let pool = pool.clone();
             set.spawn(async move {
+                let mut drains = tokio::task::JoinSet::new();
                 let mut chunk = UPLOAD_CHUNK_INITIAL;
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let body = super::upload_stream::ChunkedBody::new(
+                    let body = super::upload_stream::ChunkedBody::new_untracked(
                         (*pool).clone(),
                         chunk,
                         counters.clone(),
@@ -189,26 +205,39 @@ impl ProviderAdapter for CloudflareAdapter {
                         .header("Content-Type", "text/plain;charset=UTF-8")
                         .timeout(Duration::from_secs(40))
                         .body(reqwest::Body::wrap_stream(body));
-                    match req.send().await {
-                        Ok(r) if r.status().as_u16() == 413 => {
+                    match token.run_until_cancelled(req.send()).await {
+                        None => break,
+                        Some(Ok(r)) if r.status().as_u16() == 413 => {
+                            counters.add_failure();
                             chunk /= 2;
                             if chunk < UPLOAD_CHUNK_MIN {
                                 break;
                             }
                         }
-                        Ok(r) if r.status().is_success() => {
+                        Some(Ok(r)) if r.status().is_success() => {
+                            counters.commit_accepted(chunk as u64);
                             // 流水线化:后台排空响应,立即开始下一块(消除块间空隙)
-                            tokio::spawn(async move {
-                                let _ = r.bytes().await;
+                            let drain_token = token.clone();
+                            drains.spawn(async move {
+                                tokio::select! {
+                                    _ = drain_token.cancelled() => {},
+                                    _ = tokio::time::timeout(Duration::from_secs(2), r.bytes()) => {},
+                                }
                             });
                             chunk = (chunk * 3 / 2).min(UPLOAD_CHUNK_MAX);
                         }
-                        _ => {
+                        Some(Ok(r)) => {
+                            counters.add_failure();
+                            let _ = token.run_until_cancelled(r.bytes()).await;
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                        }
+                        Some(Err(_)) => {
                             counters.add_failure();
                             tokio::time::sleep(Duration::from_millis(250)).await;
                         }
                     }
                 }
+                while drains.join_next().await.is_some() {}
             });
         }
         let _ = tokio::time::timeout_at(deadline + Duration::from_millis(500), async {

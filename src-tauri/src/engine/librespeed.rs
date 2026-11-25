@@ -13,6 +13,8 @@ use async_trait::async_trait;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::network::ProxyPolicy;
+
 use super::adapter::{
     cache_buster, measure_http_rtt, PhaseConfig, ProviderAdapter, ThroughputCounters,
 };
@@ -29,11 +31,17 @@ pub struct LibreSpeedAdapter {
 
 impl LibreSpeedAdapter {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(8))
+        Self::with_policy(&ProxyPolicy::default())
+    }
+
+    pub fn with_policy(policy: &ProxyPolicy) -> Self {
+        let client = policy
+            .client_builder(
+                &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
+                Duration::from_secs(8),
+            )
+            .expect("代理策略不可用")
             .pool_idle_timeout(Duration::from_secs(30))
-            .no_proxy()
             .build()
             .expect("构建 HTTP 客户端失败");
         Self { client }
@@ -79,25 +87,30 @@ impl ProviderAdapter for LibreSpeedAdapter {
                 // 持续请求 garbage.php 直到阶段截止,统计真实流式字节数
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
                     let url = format!("{}?ckSize=100&_x={}", dl, cache_buster());
-                    let resp = match client
-                        .get(&url)
-                        .header("Cache-Control", "no-cache")
-                        .timeout(Duration::from_secs(20))
-                        .send()
+                    let resp = match token
+                        .run_until_cancelled(
+                            client
+                                .get(&url)
+                                .header("Cache-Control", "no-cache")
+                                .timeout(Duration::from_secs(20))
+                                .send(),
+                        )
                         .await
                     {
-                        Ok(r) if r.status().is_success() => r,
-                        Ok(_) => {
+                        Some(Ok(r)) if r.status().is_success() => r,
+                        Some(Ok(r)) => {
                             counters.add_failure();
+                            let _ = token.run_until_cancelled(r.bytes()).await;
                             // 短暂退避后重试
                             tokio::time::sleep(Duration::from_millis(300)).await;
                             continue;
                         }
-                        Err(_) => {
+                        Some(Err(_)) => {
                             counters.add_failure();
                             tokio::time::sleep(Duration::from_millis(300)).await;
                             continue;
                         }
+                        None => break,
                     };
                     let stream = resp.bytes_stream();
                     futures_util::pin_mut!(stream);
@@ -139,9 +152,10 @@ impl ProviderAdapter for LibreSpeedAdapter {
             let token = token.clone();
             let pool = pool.clone();
             set.spawn(async move {
+                let mut drains = tokio::task::JoinSet::new();
                 let mut chunk = UPLOAD_CHUNK_INITIAL;
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let body = super::upload_stream::ChunkedBody::new(
+                    let body = super::upload_stream::ChunkedBody::new_untracked(
                         (*pool).clone(),
                         chunk,
                         counters.clone(),
@@ -152,32 +166,39 @@ impl ProviderAdapter for LibreSpeedAdapter {
                         .header("Content-Type", "application/octet-stream")
                         .timeout(Duration::from_secs(30))
                         .body(reqwest::Body::wrap_stream(body));
-                    match req.send().await {
-                        Ok(r) if r.status().as_u16() == 413 => {
+                    match token.run_until_cancelled(req.send()).await {
+                        None => break,
+                        Some(Ok(r)) if r.status().as_u16() == 413 => {
+                            counters.add_failure();
                             // 服务器拒绝过大请求体:减半重试
                             chunk /= 2;
                             if chunk < UPLOAD_CHUNK_MIN {
                                 break;
                             }
                         }
-                        Ok(r) if r.status().is_success() => {
-                            // 流水线化:响应体极小,后台排空即可;立即开始下一块,
-                            // 消除"等服务器响应"造成的块间空隙(HTTP/2 多路复用 / 连接池复用)
-                            tokio::spawn(async move {
-                                let _ = r.bytes().await;
+                        Some(Ok(r)) if r.status().is_success() => {
+                            counters.commit_accepted(chunk as u64);
+                            let drain_token = token.clone();
+                            drains.spawn(async move {
+                                tokio::select! {
+                                    _ = drain_token.cancelled() => {},
+                                    _ = tokio::time::timeout(Duration::from_secs(2), r.bytes()) => {},
+                                }
                             });
                             chunk = (chunk * 3 / 2).min(UPLOAD_CHUNK_MAX);
                         }
-                        Ok(_) => {
+                        Some(Ok(r)) => {
                             counters.add_failure();
+                            let _ = token.run_until_cancelled(r.bytes()).await;
                             tokio::time::sleep(Duration::from_millis(250)).await;
                         }
-                        Err(_) => {
+                        Some(Err(_)) => {
                             counters.add_failure();
                             tokio::time::sleep(Duration::from_millis(250)).await;
                         }
                     }
                 }
+                while drains.join_next().await.is_some() {}
             });
         }
         let _ = tokio::time::timeout_at(deadline + Duration::from_millis(500), async {

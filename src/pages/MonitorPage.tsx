@@ -261,7 +261,7 @@ export function MonitorPage() {
       {/* 网卡明细 */}
       <div className="card mt16" style={{ padding: 0 }}>
         <div className="chart-title" style={{ padding: "14px 18px 0" }}><Icon name="layers" size={15} /> 网卡明细</div>
-        <div className="table-wrap mt8" style={{ maxHeight: 280, overflowY: "auto" }}>
+        <div className="table-wrap mt8">
           <table className="table">
             <thead>
               <tr><th>网卡</th><th>接收速率</th><th>发送速率</th><th>累计接收</th><th>累计发送</th><th>活动</th></tr>

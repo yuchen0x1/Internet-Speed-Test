@@ -18,6 +18,7 @@ pub struct ChunkedBody {
     granularity: usize,
     counters: Arc<ThroughputCounters>,
     token: CancellationToken,
+    count_immediately: bool,
     finished: bool,
 }
 
@@ -28,6 +29,25 @@ impl ChunkedBody {
         counters: Arc<ThroughputCounters>,
         token: CancellationToken,
     ) -> Self {
+        Self::build(pool, total_len, counters, token, true)
+    }
+
+    pub fn new_untracked(
+        pool: Vec<u8>,
+        total_len: usize,
+        counters: Arc<ThroughputCounters>,
+        token: CancellationToken,
+    ) -> Self {
+        Self::build(pool, total_len, counters, token, false)
+    }
+
+    fn build(
+        pool: Vec<u8>,
+        total_len: usize,
+        counters: Arc<ThroughputCounters>,
+        token: CancellationToken,
+        count_immediately: bool,
+    ) -> Self {
         Self {
             pool: Arc::new(pool),
             offset: 0,
@@ -35,6 +55,7 @@ impl ChunkedBody {
             granularity: 64 * 1024,
             counters,
             token,
+            count_immediately,
             finished: false,
         }
     }
@@ -50,7 +71,10 @@ impl ChunkedBody {
             self.offset = end;
             self.remaining -= take;
             let slice = &self.pool[start..end];
-            self.counters.add_bytes(slice.len() as u64);
+            self.counters.add_sent(slice.len() as u64);
+            if self.count_immediately {
+                self.counters.add_bytes(slice.len() as u64);
+            }
             Some(slice)
         } else {
             // 跨池尾:先产出池尾剩余部分,下一拍回卷到开头
@@ -58,7 +82,10 @@ impl ChunkedBody {
             self.offset = 0;
             self.remaining -= first;
             let slice = &self.pool[start..];
-            self.counters.add_bytes(slice.len() as u64);
+            self.counters.add_sent(slice.len() as u64);
+            if self.count_immediately {
+                self.counters.add_bytes(slice.len() as u64);
+            }
             Some(slice)
         }
     }
@@ -109,6 +136,7 @@ mod tests {
         let total = collect(&mut body);
         assert_eq!(total, 3 * 1024 * 1024 + 12345);
         assert_eq!(counters.total(), 3 * 1024 * 1024 + 12345);
+        assert_eq!(counters.sent(), 3 * 1024 * 1024 + 12345);
     }
 
     #[test]
@@ -119,5 +147,21 @@ mod tests {
         let mut body = ChunkedBody::new(pool, 100_000, counters.clone(), CancellationToken::new());
         let total = collect(&mut body);
         assert_eq!(total, 100_000);
+    }
+
+    #[test]
+    fn test_untracked_body_counts_sent_without_claiming_acceptance() {
+        let counters = Arc::new(ThroughputCounters::default());
+        let mut body = ChunkedBody::new_untracked(
+            vec![5u8; 1024],
+            4096,
+            counters.clone(),
+            CancellationToken::new(),
+        );
+
+        assert_eq!(collect(&mut body), 4096);
+        assert_eq!(counters.sent(), 4096);
+        assert_eq!(counters.total(), 0);
+        assert_eq!(counters.accepted(), 0);
     }
 }

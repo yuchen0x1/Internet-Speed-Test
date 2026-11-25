@@ -130,6 +130,12 @@ pub async fn set_settings(
     if !["auto", "manual"].contains(&s.node_mode.as_str()) {
         s.node_mode = "auto".into();
     }
+    if !["auto", "direct", "manual"].contains(&s.proxy_mode.as_str()) {
+        s.proxy_mode = "auto".into();
+    }
+    if s.proxy_mode != "manual" || !s.proxy_url.trim().is_empty() {
+        crate::network::ProxyPolicy::from_parts(&s.proxy_mode, &s.proxy_url, &s.proxy_bypass)?;
+    }
 
     let mut guard = state.settings.settings.write().await;
     // 节点列表仅由专用增删命令维护，旧前端完整快照不能将它覆盖。
@@ -198,6 +204,12 @@ fn normalize_imported_settings(mut s: AppSettings) -> Result<AppSettings, String
     }
     if !["auto", "manual"].contains(&s.node_mode.as_str()) {
         s.node_mode = "auto".into();
+    }
+    if !["auto", "direct", "manual"].contains(&s.proxy_mode.as_str()) {
+        s.proxy_mode = "auto".into();
+    }
+    if s.proxy_mode != "manual" || !s.proxy_url.trim().is_empty() {
+        crate::network::ProxyPolicy::from_parts(&s.proxy_mode, &s.proxy_url, &s.proxy_bypass)?;
     }
 
     if s.custom_nodes.len() > MAX_IMPORTED_CUSTOM_NODES {
@@ -340,10 +352,10 @@ pub async fn servers_list(
 ) -> Result<Vec<ServerNodeInfo>, String> {
     let settings = state.settings.settings.read().await;
     let favorites = state.storage.favorites_map();
-    let engine = state.engine.clone();
     let custom = settings.custom_nodes.clone();
+    let registry = crate::engine::selector::ServerRegistry::from_settings(&settings)?;
     drop(settings);
-    Ok(engine.registry().list_servers(&custom, &favorites).await)
+    Ok(registry.list_servers(&custom, &favorites).await)
 }
 
 /// 刷新节点:重新拉列表 + 并发探测全部节点(返回含延迟与可用性)
@@ -353,9 +365,9 @@ pub async fn servers_refresh(
 ) -> Result<Vec<ServerNodeInfo>, String> {
     let settings = state.settings.settings.read().await;
     let custom = settings.custom_nodes.clone();
+    let registry = crate::engine::selector::ServerRegistry::from_settings(&settings)?;
     drop(settings);
     let favorites = state.storage.favorites_map();
-    let registry = state.engine.registry();
     let mut nodes = registry.list_servers(&custom, &favorites).await;
     let token = tokio_util::sync::CancellationToken::new();
     let probes = registry.probe_nodes(&nodes, 8, &token).await;
@@ -1015,26 +1027,122 @@ pub async fn diag_wifi_details() -> Result<Option<diagnostics::WifiDetails>, Com
     Ok(diagnostics::wifi_details().await)
 }
 
+fn proxy_policy_from_settings(
+    settings: &AppSettings,
+) -> Result<crate::network::ProxyPolicy, CommandError> {
+    crate::network::ProxyPolicy::from_parts(
+        &settings.proxy_mode,
+        &settings.proxy_url,
+        &settings.proxy_bypass,
+    )
+    .map_err(CommandError::from)
+}
+
+async fn diagnostic_proxy_policy(
+    state: &AppState,
+) -> Result<(bool, crate::network::ProxyPolicy), CommandError> {
+    let settings = state.settings.settings.read().await.clone();
+    let policy = proxy_policy_from_settings(&settings)?;
+    Ok((settings.show_public_ip, policy))
+}
+
 #[tauri::command]
 pub async fn diag_public_info(
     state: tauri::State<'_, AppState>,
 ) -> Result<diagnostics::PublicInfo, CommandError> {
-    let allowed = state.settings.settings.read().await.show_public_ip;
-    Ok(diagnostics::public_info(allowed).await)
+    let settings = state.settings.settings.read().await.clone();
+    if !settings.show_public_ip {
+        return Ok(diagnostics::PublicInfo {
+            allowed: false,
+            ipv4: None,
+            ipv6: None,
+            isp: None,
+            edge_colo: None,
+            country: None,
+            note: None,
+            error: None,
+        });
+    }
+    match proxy_policy_from_settings(&settings) {
+        Ok(policy) => Ok(diagnostics::public_info(true, &policy).await),
+        Err(e) => Ok(diagnostics::PublicInfo {
+            allowed: true,
+            ipv4: None,
+            ipv6: None,
+            isp: None,
+            edge_colo: None,
+            country: None,
+            note: None,
+            error: Some(e.message),
+        }),
+    }
 }
 
 #[tauri::command]
-pub async fn diag_dns_test() -> Result<diagnostics::DnsTestReport, CommandError> {
-    Ok(diagnostics::dns_test().await)
+pub async fn diag_dns_test(
+    state: tauri::State<'_, AppState>,
+) -> Result<diagnostics::DnsTestReport, CommandError> {
+    let report = diagnostics::dns_test().await;
+    let domains: Vec<_> = report
+        .domains
+        .iter()
+        .filter(|d| d.domain != "__hint__")
+        .collect();
+    let domain_ok = domains.iter().filter(|d| d.ok).count();
+    let server_ok = report.server_probes.iter().filter(|p| p.ok).count();
+    let summary = format!(
+        "域名解析 {domain_ok}/{} · DNS 服务器响应 {server_ok}/{}",
+        domains.len(),
+        report.server_probes.len()
+    );
+    record_diag(
+        &state,
+        "dns",
+        None,
+        domain_ok > 0 || server_ok > 0,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 #[tauri::command]
-pub async fn diag_gateway_test() -> Result<diagnostics::GatewayReport, CommandError> {
-    Ok(diagnostics::gateway_test().await)
+pub async fn diag_gateway_test(
+    state: tauri::State<'_, AppState>,
+) -> Result<diagnostics::GatewayReport, CommandError> {
+    let report = diagnostics::gateway_test().await;
+    let summary = format!(
+        "{} · 丢包 {} · 平均 {} ms",
+        if report.reachable {
+            "可达"
+        } else {
+            "不可达或未知"
+        },
+        report
+            .loss_percent
+            .map(|v| format!("{v:.0}%"))
+            .unwrap_or_else(|| "未知".into()),
+        report
+            .avg_ms
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "—".into())
+    );
+    record_diag(
+        &state,
+        "gateway",
+        report.gateway.as_deref(),
+        report.reachable,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 #[tauri::command]
 pub async fn diag_tcp_test(
+    state: tauri::State<'_, AppState>,
     targets: Option<Vec<String>>,
 ) -> Result<Vec<diagnostics::TcpResult>, CommandError> {
     // 默认目标集:常见关键服务(均为常量,无注入面)
@@ -1061,11 +1169,25 @@ pub async fn diag_tcp_test(
     for (host, port) in list {
         out.push(diagnostics::tcp_connect_test(&host, port).await);
     }
+    let ok_count = out.iter().filter(|r| r.ok).count();
+    let summary = format!("TCP 连接成功 {ok_count}/{}", out.len());
+    record_diag(
+        &state,
+        "tcp",
+        None,
+        ok_count > 0,
+        summary,
+        serde_json::to_string(&out).ok(),
+    )
+    .await;
     Ok(out)
 }
 
 #[tauri::command]
-pub async fn diag_https_test() -> Result<Vec<diagnostics::HttpsResult>, CommandError> {
+pub async fn diag_https_test(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<diagnostics::HttpsResult>, CommandError> {
+    let (_, policy) = diagnostic_proxy_policy(state.inner()).await?;
     let urls = [
         "https://speed.cloudflare.com/__down?bytes=0",
         "https://www.msftconnecttest.com/connecttest.txt",
@@ -1073,8 +1195,19 @@ pub async fn diag_https_test() -> Result<Vec<diagnostics::HttpsResult>, CommandE
     ];
     let mut out = Vec::new();
     for u in urls {
-        out.push(diagnostics::https_test(u).await);
+        out.push(diagnostics::https_test(u, &policy).await);
     }
+    let ok_count = out.iter().filter(|r| r.ok).count();
+    let summary = format!("HTTPS 请求成功 {ok_count}/{}", out.len());
+    record_diag(
+        &state,
+        "https",
+        None,
+        ok_count > 0,
+        summary,
+        serde_json::to_string(&out).ok(),
+    )
+    .await;
     Ok(out)
 }
 
@@ -1162,8 +1295,30 @@ pub struct PingReport {
 pub async fn diag_ipv6_check(
     state: tauri::State<'_, AppState>,
 ) -> Result<diagnostics::IpVersionCheck, CommandError> {
-    let allowed = state.settings.settings.read().await.show_public_ip;
-    Ok(diagnostics::ipv6_check(allowed).await)
+    let (allowed, policy) = diagnostic_proxy_policy(state.inner()).await?;
+    let report = diagnostics::ipv6_check(allowed, &policy).await;
+    let summary = if report.available {
+        "IPv6 连接可用".to_string()
+    } else {
+        format!(
+            "IPv6 不可用{}",
+            report
+                .error
+                .as_ref()
+                .map(|e| format!(" · {e}"))
+                .unwrap_or_default()
+        )
+    };
+    record_diag(
+        &state,
+        "ipv6",
+        None,
+        report.available,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 #[tauri::command]
@@ -1278,8 +1433,22 @@ pub async fn diag_nat_type(
 }
 
 #[tauri::command]
-pub async fn diag_connectivity_grid() -> Result<Vec<diagnostics::ConnectivityEntry>, CommandError> {
-    Ok(diagnostics::connectivity_grid().await)
+pub async fn diag_connectivity_grid(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<diagnostics::ConnectivityEntry>, CommandError> {
+    let report = diagnostics::connectivity_grid().await;
+    let ok_count = report.iter().filter(|r| r.ok).count();
+    let summary = format!("服务连通 {ok_count}/{}", report.len());
+    record_diag(
+        &state,
+        "connectivity",
+        None,
+        ok_count > 0,
+        summary,
+        serde_json::to_string(&report).ok(),
+    )
+    .await;
+    Ok(report)
 }
 
 /// 导出当前诊断页快照。报告来自前端已展示的结果，Rust 端负责统一脱敏、格式化和文件写入。
@@ -1663,6 +1832,36 @@ mod tests {
         assert!(UpdateInstallGuard::acquire().is_err());
         drop(guard);
         assert!(UpdateInstallGuard::acquire().is_ok());
+    }
+
+    #[test]
+    fn diagnostic_proxy_policy_uses_saved_settings() {
+        let settings = AppSettings {
+            proxy_mode: "manual".into(),
+            proxy_url: "http://127.0.0.1:7890".into(),
+            proxy_bypass: "localhost,*.internal".into(),
+            ..AppSettings::default()
+        };
+
+        let policy = proxy_policy_from_settings(&settings).unwrap();
+
+        assert_eq!(policy.mode(), crate::network::ProxyMode::Manual);
+        assert!(policy.has_proxy());
+        assert!(!policy.is_direct_route());
+    }
+
+    #[test]
+    fn diagnostic_proxy_policy_rejects_invalid_saved_manual_proxy() {
+        let settings = AppSettings {
+            proxy_mode: "manual".into(),
+            ..AppSettings::default()
+        };
+
+        let error = proxy_policy_from_settings(&settings).unwrap_err();
+
+        assert_eq!(error.code, "failed");
+        assert!(error.message.contains("手动代理"));
+        assert!(!error.message.contains("://"));
     }
 
     #[test]

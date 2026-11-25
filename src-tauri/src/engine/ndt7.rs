@@ -22,6 +22,8 @@ use tokio_tungstenite::tungstenite::http::{HeaderMap, Request};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
+use crate::network::ProxyPolicy;
+
 use super::adapter::{PhaseConfig, ProviderAdapter, ThroughputCounters};
 use super::model::ServerNodeInfo;
 
@@ -36,6 +38,7 @@ const UPLOAD_POOL_BYTES: usize = 1024 * 1024;
 
 pub struct Ndt7Adapter {
     client: reqwest::Client,
+    websocket_direct_allowed: bool,
     /// 已发现的服务器 + 发现时刻(去抖:避免在 Locate API 失败时反复请求)。
     /// 必须带 TTL:社区节点会下线,永久缓存会让自动优选一直指向死节点直到重启应用。
     cached: std::sync::Mutex<Option<(ServerNodeInfo, std::time::Instant)>>,
@@ -46,15 +49,22 @@ const DISCOVERY_TTL: Duration = Duration::from_secs(600);
 
 impl Ndt7Adapter {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(6))
+        Self::with_policy(&ProxyPolicy::default())
+    }
+
+    pub fn with_policy(policy: &ProxyPolicy) -> Self {
+        let client = policy
+            .client_builder(
+                &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
+                Duration::from_secs(6),
+            )
+            .expect("构建 NDT7 HTTP 客户端策略失败")
             .timeout(Duration::from_secs(10))
-            .no_proxy()
             .build()
             .expect("构建 NDT7 HTTP 客户端失败");
         Self {
             client,
+            websocket_direct_allowed: policy.websocket_direct_allowed(),
             cached: std::sync::Mutex::new(None),
         }
     }
@@ -103,7 +113,11 @@ impl Ndt7Adapter {
                 None => continue,
             };
             let t0 = std::time::Instant::now();
-            let probe = tokio::time::timeout(Duration::from_secs(4), ws_connect(&ws, &token)).await;
+            let probe = tokio::time::timeout(
+                Duration::from_secs(4),
+                ws_connect(&ws, &token, self.websocket_direct_allowed),
+            )
+            .await;
             if let Ok(Ok(_stream)) = probe {
                 let rtt = t0.elapsed().as_secs_f64() * 1000.0;
                 let better = best.as_ref().is_none_or(|(_, b)| rtt < *b);
@@ -252,13 +266,25 @@ fn ws_request(url: &str) -> Result<Request<()>, String> {
     Ok(req)
 }
 
+fn server_confirmed_upload_bytes(message: &str) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(message).ok()?;
+    if value.get("Origin")?.as_str()? != "server" || value.get("Test")?.as_str()? != "upload" {
+        return None;
+    }
+    value.get("AppInfo")?.get("NumBytes")?.as_u64()
+}
+
 async fn ws_connect(
     url: &str,
     token: &CancellationToken,
+    websocket_direct_allowed: bool,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
 > {
+    if !websocket_direct_allowed {
+        return Err("当前代理模式不支持 NDT7 WebSocket 隧道".into());
+    }
     let req = ws_request(url)?;
     let fut = tokio_tungstenite::connect_async(req);
     match token.run_until_cancelled(fut).await {
@@ -283,9 +309,12 @@ impl ProviderAdapter for Ndt7Adapter {
     ) -> Result<f64, String> {
         let ws = to_ws_url(&node.download_url()).ok_or("NDT7 节点 URL 无效")?;
         let t0 = std::time::Instant::now();
-        let stream = tokio::time::timeout(Duration::from_secs(20), ws_connect(&ws, token))
-            .await
-            .map_err(|_| "WS 握手超时".to_string())??;
+        let stream = tokio::time::timeout(
+            Duration::from_secs(20),
+            ws_connect(&ws, token, self.websocket_direct_allowed),
+        )
+        .await
+        .map_err(|_| "WS 握手超时".to_string())??;
         drop(stream); // 握手完成即测得往返,立即释放连接
         Ok(t0.elapsed().as_secs_f64() * 1000.0)
     }
@@ -303,13 +332,14 @@ impl ProviderAdapter for Ndt7Adapter {
         };
         let deadline = tokio::time::Instant::now() + cfg.duration;
         let mut set = tokio::task::JoinSet::new();
+        let websocket_direct_allowed = self.websocket_direct_allowed;
         for _ in 0..cfg.streams.max(1) {
             let url = url.clone();
             let counters = counters.clone();
             let token = token.clone();
             set.spawn(async move {
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let mut ws = match ws_connect(&url, &token).await {
+                    let mut ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
                         Ok(s) => s,
                         Err(_) => {
                             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -364,6 +394,7 @@ impl ProviderAdapter for Ndt7Adapter {
         let deadline = tokio::time::Instant::now() + cfg.duration;
         let pool = Arc::new(super::util::random_block(UPLOAD_POOL_BYTES));
         let mut set = tokio::task::JoinSet::new();
+        let websocket_direct_allowed = self.websocket_direct_allowed;
         for _ in 0..cfg.streams.max(1) {
             let url = url.clone();
             let counters = counters.clone();
@@ -371,25 +402,72 @@ impl ProviderAdapter for Ndt7Adapter {
             let pool = pool.clone();
             set.spawn(async move {
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let mut ws = match ws_connect(&url, &token).await {
+                    let ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
                         Ok(s) => s,
                         Err(_) => {
-                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            tokio::select! {
+                                _ = token.cancelled() => return,
+                                _ = tokio::time::sleep(Duration::from_millis(300)) => {}
+                            }
                             continue;
                         }
                     };
+                    let (mut writer, mut reader) = ws.split();
+                    let connection_token = token.child_token();
+                    let reader_token = connection_token.clone();
+                    let reader_counters = counters.clone();
+                    let reader_task = tokio::spawn(async move {
+                        let mut confirmed_bytes = 0;
+                        loop {
+                            let message = tokio::select! {
+                                _ = reader_token.cancelled() => break,
+                                message = reader.next() => message,
+                            };
+                            match message {
+                                Some(Ok(Message::Text(text))) => {
+                                    if let Some(total) =
+                                        server_confirmed_upload_bytes(text.as_str())
+                                    {
+                                        if let Some(delta) = total.checked_sub(confirmed_bytes) {
+                                            reader_counters.commit_accepted(delta);
+                                            confirmed_bytes = total;
+                                        }
+                                    }
+                                }
+                                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                                Some(Ok(_)) => {}
+                            }
+                        }
+                    });
                     let mut off = 0usize;
                     loop {
                         if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
-                            return;
+                            break;
+                        }
+                        if reader_task.is_finished() {
+                            break;
                         }
                         let end = (off + WS_CHUNK_BYTES).min(pool.len());
                         let chunk = pool[off..end].to_vec();
                         off = if end >= pool.len() { 0 } else { end };
-                        match ws.send(Message::Binary(chunk.clone().into())).await {
-                            Ok(()) => counters.add_bytes(chunk.len() as u64),
-                            Err(_) => break, // 传输错误不归入 HTTP 请求失败。
+                        let send_result = tokio::select! {
+                            _ = token.cancelled() => break,
+                            _ = tokio::time::sleep_until(deadline) => break,
+                            result = writer.send(Message::Binary(chunk.clone().into())) => result,
+                        };
+                        match send_result {
+                            Ok(()) => counters.add_sent(chunk.len() as u64),
+                            Err(_) => break,
                         }
+                    }
+                    connection_token.cancel();
+                    let _ = reader_task.await;
+                    if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    tokio::select! {
+                        _ = token.cancelled() => return,
+                        _ = tokio::time::sleep(Duration::from_millis(300)) => {}
                     }
                 }
             });
@@ -454,6 +532,32 @@ mod tests {
             .ends_with("/ndt/v7/upload?access_token=abc123"));
         assert!(n.getip_url.is_empty(), "NDT7 不提供 IP 接口");
         assert!(!n.allow_http, "wss 节点不应标记为未加密");
+    }
+
+    #[test]
+    fn test_upload_measurement_requires_server_confirmation() {
+        assert_eq!(
+            server_confirmed_upload_bytes(
+                r#"{"Origin":"server","Test":"upload","AppInfo":{"NumBytes":1234}}"#
+            ),
+            Some(1234)
+        );
+        assert_eq!(
+            server_confirmed_upload_bytes(
+                r#"{"Origin":"client","Test":"upload","AppInfo":{"NumBytes":1234}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            server_confirmed_upload_bytes(
+                r#"{"Origin":"server","Test":"download","AppInfo":{"NumBytes":1234}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            server_confirmed_upload_bytes(r#"{"Origin":"server","Test":"upload"}"#),
+            None
+        );
     }
 
     /// 真实 Locate v2 响应结构:`{"results":[...]}`,同时给 ws 与 wss

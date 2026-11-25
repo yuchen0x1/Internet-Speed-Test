@@ -213,7 +213,7 @@ export function BatchTestPage() {
       {/* 结果表 */}
       {rows.length > 0 && (
         <div className="card" style={{ padding: 0 }}>
-          <div className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
+          <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>

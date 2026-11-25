@@ -36,6 +36,12 @@ pub struct AppSettings {
     pub up_concurrency: u32,
     /// 自动保存测速记录
     pub autosave_history: bool,
+    /// 网络代理模式: auto | direct | manual
+    pub proxy_mode: String,
+    /// 手动代理地址(支持 http/https)
+    pub proxy_url: String,
+    /// 不经过代理的主机列表,逗号或分号分隔
+    pub proxy_bypass: String,
 
     // ---------- 监控 ----------
     /// 后台网络监控开关
@@ -95,6 +101,9 @@ impl Default for AppSettings {
             down_concurrency: 6,
             up_concurrency: 4,
             autosave_history: true,
+            proxy_mode: "auto".into(),
+            proxy_url: String::new(),
+            proxy_bypass: String::new(),
             monitor_enabled: true,
             show_traffic: true,
             autostart: false,
