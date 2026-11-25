@@ -570,7 +570,7 @@ impl SpeedTestEngine {
             )
             .await;
         let down_failures;
-        if matches!(&dl, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
+        if cfg.auto_select && phase_needs_failover(&dl) {
             for candidate in fallback_candidates(&fallback_nodes, &node.id) {
                 if token.is_cancelled() {
                     continue;
@@ -605,7 +605,7 @@ impl SpeedTestEngine {
                         &mut candidate_samples,
                     )
                     .await;
-                if matches!(&candidate_dl, PhaseOutcome::Ok(bytes, ..) if *bytes > 0) {
+                if phase_is_complete_success(&candidate_dl) {
                     node = candidate.clone();
                     result.server = Some(node.clone());
                     sink.emit(EngineEvent::Server { node: node.clone() });
@@ -623,17 +623,26 @@ impl SpeedTestEngine {
             return Ok(false);
         }
         match dl {
-            PhaseOutcome::Ok(bytes, failures, loaded, warmup_bytes) => {
+            PhaseOutcome::Ok(
+                bytes,
+                failures,
+                loaded,
+                warmup_bytes,
+                warmup_ms,
+                phase_ms,
+                phase_error,
+            ) => {
                 result.http_failures += failures;
                 down_failures = failures;
                 result.down_samples = down_samples;
                 result.loaded_down_ms = loaded;
-                result.download_mbps = quality::stable_window_mbps(
-                    bytes,
-                    cfg.duration_secs as f64 * 1000.0,
-                    WARMUP_MS,
-                    warmup_bytes,
-                );
+                if let Some(warning) = phase_error {
+                    result
+                        .conditions
+                        .push(format!("下载阶段传输提前结束，保留已测数据: {warning}"));
+                }
+                result.download_mbps =
+                    quality::stable_window_mbps(bytes, phase_ms, warmup_ms, warmup_bytes);
                 result.download_peak_mbps = quality::peak_from_samples(&result.down_samples);
                 if bytes == 0 {
                     return Err(
@@ -661,7 +670,7 @@ impl SpeedTestEngine {
                 &mut up_samples,
             )
             .await;
-        if matches!(&ul, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
+        if cfg.auto_select && phase_needs_failover(&ul) {
             for candidate in fallback_candidates(&fallback_nodes, &node.id) {
                 if candidate.id == node.id || token.is_cancelled() {
                     continue;
@@ -701,12 +710,20 @@ impl SpeedTestEngine {
                     download_failures,
                     loaded_down,
                     download_warmup_bytes,
+                    download_warmup_ms,
+                    download_phase_ms,
+                    download_phase_error,
                 ) = candidate_dl
                 else {
                     continue;
                 };
                 if download_bytes == 0 {
                     continue;
+                }
+                if let Some(warning) = download_phase_error {
+                    result
+                        .conditions
+                        .push(format!("备用节点下载阶段提前结束，保留已测数据: {warning}"));
                 }
                 let mut candidate_samples = Vec::new();
                 let candidate_ul = self
@@ -722,7 +739,7 @@ impl SpeedTestEngine {
                         &mut candidate_samples,
                     )
                     .await;
-                if matches!(&candidate_ul, PhaseOutcome::Ok(bytes, ..) if *bytes > 0) {
+                if phase_is_complete_success(&candidate_ul) {
                     node = candidate.clone();
                     result.server = Some(node.clone());
                     sink.emit(EngineEvent::Server { node: node.clone() });
@@ -739,8 +756,8 @@ impl SpeedTestEngine {
                     result.down_samples = candidate_down_samples;
                     result.download_mbps = quality::stable_window_mbps(
                         download_bytes,
-                        cfg.duration_secs as f64 * 1000.0,
-                        WARMUP_MS,
+                        download_phase_ms,
+                        download_warmup_ms,
                         download_warmup_bytes,
                     );
                     result.download_peak_mbps = quality::peak_from_samples(&result.down_samples);
@@ -755,10 +772,23 @@ impl SpeedTestEngine {
             return Ok(false);
         }
         match ul {
-            PhaseOutcome::Ok(bytes, failures, loaded, warmup_bytes) => {
+            PhaseOutcome::Ok(
+                bytes,
+                failures,
+                loaded,
+                warmup_bytes,
+                warmup_ms,
+                phase_ms,
+                phase_error,
+            ) => {
                 result.http_failures += failures;
                 result.up_samples = up_samples;
                 result.loaded_up_ms = loaded;
+                if let Some(warning) = phase_error {
+                    result
+                        .conditions
+                        .push(format!("上传阶段传输提前结束，保留已确认数据: {warning}"));
+                }
                 if bytes == 0 {
                     // 上传失败不终止整体测试,如实标注
                     result.upload_mbps = None;
@@ -768,8 +798,8 @@ impl SpeedTestEngine {
                 } else {
                     result.upload_mbps = Some(quality::stable_window_mbps(
                         bytes,
-                        cfg.duration_secs as f64 * 1000.0,
-                        WARMUP_MS,
+                        phase_ms,
+                        warmup_ms,
                         warmup_bytes,
                     ));
                     result.upload_peak_mbps = Some(quality::peak_from_samples(&result.up_samples));
@@ -940,15 +970,50 @@ impl SpeedTestEngine {
                 Some(quality::median(&mut v))
             }
         };
-        PhaseOutcome::Ok(bytes, failures, loaded_median, warmup_bytes)
+        let phase_error = counters.phase_error();
+        if bytes == 0 {
+            if let Some(error) = phase_error.as_deref() {
+                return PhaseOutcome::Failed(error.to_string());
+            }
+        }
+        let (phase_ms, warmup_ms, warmup_bytes) = counters
+            .measurement_timing()
+            .map(|(duration_ms, known_warmup_bytes)| {
+                known_warmup_bytes
+                    .map(|bytes| (duration_ms, WARMUP_MS, bytes))
+                    .unwrap_or((duration_ms, 0.0, 0))
+            })
+            .unwrap_or((duration.as_secs_f64() * 1000.0, WARMUP_MS, warmup_bytes));
+        PhaseOutcome::Ok(
+            bytes,
+            failures,
+            loaded_median,
+            warmup_bytes,
+            warmup_ms,
+            phase_ms,
+            phase_error,
+        )
     }
 }
 
 enum PhaseOutcome {
-    /// (总字节, HTTP 失败次数, 负载延迟中位数, 预热期字节数)
-    Ok(u64, u32, Option<f64>, u64),
+    /// (总字节, HTTP 失败次数, 负载延迟中位数, 预热期字节数, 预热窗口毫秒数,
+    /// 实际阶段毫秒数, 协议阶段警告)
+    Ok(u64, u32, Option<f64>, u64, f64, f64, Option<String>),
     Cancelled,
     Failed(String),
+}
+
+fn phase_needs_failover(outcome: &PhaseOutcome) -> bool {
+    match outcome {
+        PhaseOutcome::Failed(_) => true,
+        PhaseOutcome::Ok(bytes, _, _, _, _, _, phase_error) => *bytes == 0 || phase_error.is_some(),
+        PhaseOutcome::Cancelled => false,
+    }
+}
+
+fn phase_is_complete_success(outcome: &PhaseOutcome) -> bool {
+    matches!(outcome, PhaseOutcome::Ok(bytes, _, _, _, _, _, None) if *bytes > 0)
 }
 
 fn connectivity_failure(token: &CancellationToken, error: String) -> Result<bool, String> {
@@ -1180,5 +1245,24 @@ mod tests {
             ndt7_proxy_unavailable_reason(&probes),
             Some("当前代理模式不支持 NDT7 WebSocket 隧道")
         );
+    }
+
+    #[test]
+    fn throughput_phase_protocol_error_requires_failover() {
+        let partial = PhaseOutcome::Ok(
+            1024,
+            0,
+            None,
+            0,
+            0.0,
+            500.0,
+            Some("NDT7 WebSocket 提前关闭".into()),
+        );
+        assert!(phase_needs_failover(&partial));
+        assert!(!phase_is_complete_success(&partial));
+
+        let complete = PhaseOutcome::Ok(1024, 0, None, 0, 0.0, 500.0, None);
+        assert!(!phase_needs_failover(&complete));
+        assert!(phase_is_complete_success(&complete));
     }
 }

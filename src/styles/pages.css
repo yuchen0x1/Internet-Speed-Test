@@ -196,6 +196,19 @@ html.theme-light input[type="date"] { color-scheme: light; }
   gap: 18px;
   align-items: start;
 }
+.settings-columns {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.settings-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 .settings-section { min-width: 0; }
 .settings-section--appearance,
 .settings-section--speed,
@@ -271,6 +284,7 @@ html.theme-light input[type="date"] { color-scheme: light; }
   .quality-grid { grid-template-columns: 1fr; }
   .quality-grid2, .diag-grid { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
+  .settings-columns { grid-template-columns: 1fr; }
   .settings-section--appearance,
   .settings-section--speed,
   .settings-section--network,

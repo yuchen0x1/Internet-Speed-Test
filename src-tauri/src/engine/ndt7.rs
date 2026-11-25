@@ -31,11 +31,16 @@ use super::model::ServerNodeInfo;
 pub const NDT7_SUBPROTOCOL: &str = "net.measurementlab.ndt.v7";
 /// M-Lab Locate API v2(就近 NDT7 服务发现)
 const LOCATE_URL: &str = "https://locate.measurementlab.net/v2/nearest/ndt/ndt7";
-/// 单条 WS 报文上限(协议建议 ≤65535 字节)
-const WS_CHUNK_BYTES: usize = 65_535;
+/// Start at the protocol-recommended 8 KiB, then grow gradually for throughput.
+const WS_INITIAL_CHUNK_BYTES: usize = 8 * 1024;
+const WS_MAX_CHUNK_BYTES: usize = 64 * 1024;
 /// 上传随机数据池大小
 const UPLOAD_POOL_BYTES: usize = 1024 * 1024;
-const RECONNECT_BACKOFF: Duration = Duration::from_millis(300);
+/// NDT7 measurements use a single TCP connection and run for at most 10 seconds.
+const NDT7_MAX_TEST_DURATION: Duration = Duration::from_secs(10);
+const NDT7_WARMUP: Duration = Duration::from_millis(1200);
+const NDT7_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
+const NDT7_CLOSE_GRACE: Duration = Duration::from_millis(500);
 
 pub struct Ndt7Adapter {
     client: reqwest::Client,
@@ -131,13 +136,6 @@ impl Ndt7Adapter {
             }
         }
         best.map(|(n, _)| n)
-    }
-}
-
-async fn wait_before_reconnect(token: &CancellationToken) -> bool {
-    tokio::select! {
-        _ = token.cancelled() => false,
-        _ = tokio::time::sleep(RECONNECT_BACKOFF) => !token.is_cancelled(),
     }
 }
 
@@ -253,10 +251,12 @@ pub fn to_ws_url(url: &str) -> Option<String> {
     if url.starts_with("wss://") || url.starts_with("ws://") {
         return Some(url.to_string());
     }
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    Some(format!("wss://{rest}"))
+    url.strip_prefix("https://")
+        .map(|rest| format!("wss://{rest}"))
+        .or_else(|| {
+            url.strip_prefix("http://")
+                .map(|rest| format!("ws://{rest}"))
+        })
 }
 
 /// 构造带 NDT7 子协议头的 WS 握手请求
@@ -277,12 +277,24 @@ fn ws_request(url: &str) -> Result<Request<()>, String> {
     Ok(req)
 }
 
+#[cfg(test)]
 fn server_confirmed_upload_bytes(message: &str) -> Option<u64> {
+    server_upload_measurement(message).map(|(bytes, _)| bytes)
+}
+
+fn server_upload_measurement(message: &str) -> Option<(u64, Option<Duration>)> {
     let value: serde_json::Value = serde_json::from_str(message).ok()?;
     if value.get("Origin")?.as_str()? != "server" || value.get("Test")?.as_str()? != "upload" {
         return None;
     }
-    value.get("AppInfo")?.get("NumBytes")?.as_u64()
+    let app_info = value.get("AppInfo")?;
+    let bytes = app_info.get("NumBytes")?.as_u64()?;
+    let elapsed = app_info
+        .get("ElapsedTime")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|micros| *micros > 0)
+        .map(Duration::from_micros);
+    Some((bytes, elapsed))
 }
 
 async fn ws_connect(
@@ -300,8 +312,37 @@ async fn ws_connect(
     let fut = tokio_tungstenite::connect_async(req);
     match token.run_until_cancelled(fut).await {
         Some(Ok((stream, _resp))) => Ok(stream),
-        Some(Err(_)) => Err("WS 握手失败".into()),
+        Some(Err(error)) => Err(summarize_ws_error(&error)),
         None => Err("已取消".into()),
+    }
+}
+
+fn summarize_ws_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
+    use tokio_tungstenite::tungstenite::Error;
+
+    match error {
+        Error::Io(error) => match error.kind() {
+            std::io::ErrorKind::TimedOut => "NDT7 TCP 连接超时".into(),
+            std::io::ErrorKind::ConnectionRefused => "NDT7 服务器拒绝 TCP 连接".into(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::AddrNotAvailable => {
+                "NDT7 DNS 或地址解析失败".into()
+            }
+            std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe => "NDT7 TCP 连接中断".into(),
+            _ => "NDT7 TCP 连接失败".into(),
+        },
+        Error::Tls(_) => "NDT7 TLS 握手失败".into(),
+        Error::Http(response) => {
+            format!(
+                "NDT7 HTTP {} 拒绝 WebSocket 握手",
+                response.status().as_u16()
+            )
+        }
+        Error::Url(_) => "NDT7 WebSocket URL 无效".into(),
+        Error::ConnectionClosed | Error::AlreadyClosed => "NDT7 WebSocket 提前关闭".into(),
+        Error::Protocol(_) | Error::HttpFormat(_) => "NDT7 WebSocket 协议握手失败".into(),
+        _ => "NDT7 WebSocket 连接失败".into(),
     }
 }
 
@@ -339,60 +380,93 @@ impl ProviderAdapter for Ndt7Adapter {
     ) {
         let url = match to_ws_url(&node.download_url()) {
             Some(u) => u,
-            None => return,
+            None => {
+                counters.set_phase_error("NDT7 下载地址无效");
+                return;
+            }
         };
-        let deadline = tokio::time::Instant::now() + cfg.duration;
-        let mut set = tokio::task::JoinSet::new();
-        let websocket_direct_allowed = self.websocket_direct_allowed;
-        for _ in 0..cfg.streams.max(1) {
-            let url = url.clone();
-            let counters = counters.clone();
-            let token = token.clone();
-            set.spawn(async move {
-                while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let mut ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
-                        Ok(s) => s,
-                        Err(_) => {
-                            if !wait_before_reconnect(&token).await {
-                                return;
-                            }
-                            continue;
-                        }
-                    };
-                    // 单条连接:服务端约 10-15s 主动关闭;循环到阶段截止再重连
-                    loop {
-                        if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
-                            return;
-                        }
-                        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-                        let msg = tokio::time::timeout(left, ws.next()).await;
-                        match msg {
-                            Ok(Some(Ok(Message::Binary(b)))) => counters.add_bytes(b.len() as u64),
-                            Ok(Some(Ok(Message::Text(_)))) => {
-                                // NDT7 JSON telemetry 是控制报文,不计入二进制吞吐数据。
-                            }
-                            Ok(Some(Ok(_))) => {}
-                            Ok(Some(Err(_))) => {
-                                // WebSocket 传输错误后重连;HTTP 失败计数仅用于 HTTP 适配器。
-                                break;
-                            }
-                            Ok(None) => {
-                                // 服务端会主动结束测量连接,正常关闭后重连不算传输失败。
-                                break;
-                            }
-                            Err(_) => return, // 阶段截止
+        let test_duration = cfg.duration.min(NDT7_MAX_TEST_DURATION);
+        let connect_timeout = test_duration.min(NDT7_CONNECT_TIMEOUT);
+        let mut ws = match tokio::time::timeout(
+            connect_timeout,
+            ws_connect(&url, &token, self.websocket_direct_allowed),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
+                if !token.is_cancelled() {
+                    counters.set_phase_error(error);
+                }
+                token.cancel();
+                return;
+            }
+            Err(_) => {
+                if !token.is_cancelled() {
+                    counters.set_phase_error("NDT7 WebSocket 握手超时");
+                }
+                token.cancel();
+                return;
+            }
+        };
+
+        let measurement_started = tokio::time::Instant::now();
+        let deadline = measurement_started + test_duration;
+        let mut warmup_bytes = 0;
+        let mut warmup_observed = false;
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = tokio::time::sleep_until(deadline) => break,
+                message = ws.next() => match message {
+                    Some(Ok(Message::Binary(bytes))) => {
+                        let count = bytes.len() as u64;
+                        counters.add_bytes(count);
+                        if measurement_started.elapsed() < NDT7_WARMUP {
+                            warmup_bytes = warmup_bytes.saturating_add(count);
+                            warmup_observed = true;
                         }
                     }
-                    if !wait_before_reconnect(&token).await {
-                        return;
+                    Some(Ok(Message::Text(_))) => {
+                        // NDT7 JSON telemetry is control data, not throughput.
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => {
+                        counters.set_phase_error("NDT7 WebSocket 传输中断");
+                        break;
                     }
                 }
-            });
+            }
         }
-        let _ = tokio::time::timeout_at(deadline + Duration::from_millis(800), async {
-            while set.join_next().await.is_some() {}
-        })
-        .await;
+        let measurement_duration = measurement_started.elapsed();
+        if !token.is_cancelled()
+            && measurement_duration < test_duration
+            && counters.total() > 0
+            && counters.phase_error().is_none()
+        {
+            counters.set_phase_error("NDT7 WebSocket 在阶段结束前关闭");
+        }
+        let _ = tokio::time::timeout(Duration::from_millis(100), ws.close(None)).await;
+        if !token.is_cancelled() && measurement_duration >= test_duration {
+            let close_deadline = tokio::time::Instant::now() + NDT7_CLOSE_GRACE;
+            while tokio::time::Instant::now() < close_deadline {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(close_deadline) => break,
+                    message = ws.next() => match message {
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        Some(Ok(_)) => {}
+                    }
+                }
+            }
+        }
+        if counters.total() == 0 && counters.phase_error().is_none() {
+            counters.set_phase_error("NDT7 服务器未发送下载数据");
+        }
+        counters.set_measurement_timing(
+            measurement_duration,
+            warmup_observed.then_some(warmup_bytes),
+        );
         token.cancel();
     }
 
@@ -405,93 +479,135 @@ impl ProviderAdapter for Ndt7Adapter {
     ) {
         let url = match to_ws_url(&node.upload_url()) {
             Some(u) => u,
-            None => return,
+            None => {
+                counters.set_phase_error("NDT7 上传地址无效");
+                return;
+            }
         };
-        let deadline = tokio::time::Instant::now() + cfg.duration;
+        let test_duration = cfg.duration.min(NDT7_MAX_TEST_DURATION);
         let pool = Arc::new(super::util::random_block(UPLOAD_POOL_BYTES));
-        let mut set = tokio::task::JoinSet::new();
-        let websocket_direct_allowed = self.websocket_direct_allowed;
-        for _ in 0..cfg.streams.max(1) {
-            let url = url.clone();
-            let counters = counters.clone();
-            let token = token.clone();
-            let pool = pool.clone();
-            set.spawn(async move {
-                while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
-                        Ok(s) => s,
-                        Err(_) => {
-                            tokio::select! {
-                                _ = token.cancelled() => return,
-                                _ = tokio::time::sleep(Duration::from_millis(300)) => {}
-                            }
-                            continue;
-                        }
-                    };
-                    let (mut writer, mut reader) = ws.split();
-                    let connection_token = token.child_token();
-                    let reader_token = connection_token.clone();
-                    let reader_counters = counters.clone();
-                    let reader_task = tokio::spawn(async move {
-                        let mut confirmed_bytes = 0;
-                        loop {
-                            let message = tokio::select! {
-                                _ = reader_token.cancelled() => break,
-                                message = reader.next() => message,
-                            };
-                            match message {
-                                Some(Ok(Message::Text(text))) => {
-                                    if let Some(total) =
-                                        server_confirmed_upload_bytes(text.as_str())
-                                    {
-                                        if let Some(delta) = total.checked_sub(confirmed_bytes) {
-                                            reader_counters.commit_accepted(delta);
-                                            confirmed_bytes = total;
-                                        }
-                                    }
-                                }
-                                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                                Some(Ok(_)) => {}
-                            }
-                        }
-                    });
-                    let mut off = 0usize;
-                    loop {
-                        if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
-                            break;
-                        }
-                        if reader_task.is_finished() {
-                            break;
-                        }
-                        let end = (off + WS_CHUNK_BYTES).min(pool.len());
-                        let chunk = pool[off..end].to_vec();
-                        off = if end >= pool.len() { 0 } else { end };
-                        let send_result = tokio::select! {
-                            _ = token.cancelled() => break,
-                            _ = tokio::time::sleep_until(deadline) => break,
-                            result = writer.send(Message::Binary(chunk.clone().into())) => result,
-                        };
-                        match send_result {
-                            Ok(()) => counters.add_sent(chunk.len() as u64),
-                            Err(_) => break,
-                        }
-                    }
-                    connection_token.cancel();
-                    let _ = reader_task.await;
-                    if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
-                        return;
-                    }
-                    tokio::select! {
-                        _ = token.cancelled() => return,
-                        _ = tokio::time::sleep(Duration::from_millis(300)) => {}
+        let connect_timeout = test_duration.min(NDT7_CONNECT_TIMEOUT);
+        let ws = match tokio::time::timeout(
+            connect_timeout,
+            ws_connect(&url, &token, self.websocket_direct_allowed),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
+                if !token.is_cancelled() {
+                    counters.set_phase_error(error);
+                }
+                token.cancel();
+                return;
+            }
+            Err(_) => {
+                if !token.is_cancelled() {
+                    counters.set_phase_error("NDT7 WebSocket 握手超时");
+                }
+                token.cancel();
+                return;
+            }
+        };
+
+        let (mut writer, mut reader) = ws.split();
+        let measurement_started = tokio::time::Instant::now();
+        let deadline = measurement_started + test_duration;
+        let mut confirmed_bytes = 0;
+        let mut warmup_bytes = 0;
+        let mut warmup_observed = false;
+        let mut server_duration = None;
+        let mut off = 0usize;
+        let mut chunk_bytes = WS_INITIAL_CHUNK_BYTES;
+        let mut frames_sent = 0usize;
+        let mut close_received = false;
+        while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
+            let end = (off + chunk_bytes).min(pool.len());
+            let chunk = pool[off..end].to_vec();
+            off = if end >= pool.len() { 0 } else { end };
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = tokio::time::sleep_until(deadline) => break,
+                message = reader.next() => {
+                    if observe_upload_message(
+                        message,
+                        &counters,
+                        &mut confirmed_bytes,
+                        measurement_started,
+                        &mut warmup_bytes,
+                        &mut warmup_observed,
+                        &mut server_duration,
+                    ) != UploadMessageState::Continue {
+                        close_received = true;
+                        break;
                     }
                 }
-            });
+                sent = writer.send(Message::Binary(chunk.clone().into())) => match sent {
+                    Ok(()) => {
+                        counters.add_sent(chunk.len() as u64);
+                        frames_sent += 1;
+                        if frames_sent % 8 == 0 {
+                            chunk_bytes = (chunk_bytes * 2).min(WS_MAX_CHUNK_BYTES);
+                        }
+                    }
+                    Err(_) => {
+                        counters.set_phase_error("NDT7 WebSocket 上传中断");
+                        break;
+                    }
+                }
+            }
         }
-        let _ = tokio::time::timeout_at(deadline + Duration::from_millis(800), async {
-            while set.join_next().await.is_some() {}
-        })
-        .await;
+
+        let client_measurement_duration = measurement_started.elapsed();
+        if !token.is_cancelled()
+            && client_measurement_duration < test_duration
+            && counters.total() > 0
+            && counters.phase_error().is_none()
+        {
+            counters.set_phase_error("NDT7 WebSocket 上传在阶段结束前关闭");
+        }
+        if !token.is_cancelled() && !close_received {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(100),
+                writer.send(Message::Close(None)),
+            )
+            .await;
+            let close_deadline = tokio::time::Instant::now() + NDT7_CLOSE_GRACE;
+            while !token.is_cancelled() && tokio::time::Instant::now() < close_deadline {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = tokio::time::sleep_until(close_deadline) => break,
+                    message = reader.next() => {
+                        if observe_upload_message(
+                            message,
+                            &counters,
+                            &mut confirmed_bytes,
+                            measurement_started,
+                            &mut warmup_bytes,
+                            &mut warmup_observed,
+                            &mut server_duration,
+                        ) != UploadMessageState::Continue {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if close_received {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(100),
+                writer.send(Message::Close(None)),
+            )
+            .await;
+        }
+        if counters.total() == 0 && counters.phase_error().is_none() {
+            counters.set_phase_error("NDT7 服务端未确认上传数据");
+        }
+        counters.set_measurement_timing(
+            server_duration
+                .unwrap_or(client_measurement_duration)
+                .min(test_duration),
+            warmup_observed.then_some(warmup_bytes),
+        );
         token.cancel();
     }
 
@@ -505,16 +621,243 @@ impl ProviderAdapter for Ndt7Adapter {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadMessageState {
+    Continue,
+    Closed,
+    Failed,
+}
+
+fn observe_upload_message(
+    message: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+    counters: &ThroughputCounters,
+    confirmed_bytes: &mut u64,
+    measurement_started: tokio::time::Instant,
+    warmup_bytes: &mut u64,
+    warmup_observed: &mut bool,
+    server_duration: &mut Option<Duration>,
+) -> UploadMessageState {
+    match message {
+        Some(Ok(Message::Text(text))) => {
+            if let Some((total, elapsed)) = server_upload_measurement(text.as_str()) {
+                let Some(delta) = total.checked_sub(*confirmed_bytes) else {
+                    return UploadMessageState::Continue;
+                };
+                if delta == 0 {
+                    return UploadMessageState::Continue;
+                }
+                counters.commit_accepted(delta);
+                *confirmed_bytes = total;
+                let client_elapsed = measurement_started.elapsed();
+                let trusted_elapsed = elapsed.and_then(|candidate| {
+                    validated_server_duration(candidate, client_elapsed, *server_duration)
+                });
+                let measurement_elapsed = trusted_elapsed.unwrap_or(client_elapsed);
+                if measurement_elapsed <= NDT7_WARMUP {
+                    *warmup_bytes = total;
+                    *warmup_observed = true;
+                }
+                if let Some(elapsed) = trusted_elapsed {
+                    *server_duration = Some(elapsed);
+                }
+            }
+            UploadMessageState::Continue
+        }
+        Some(Ok(Message::Close(_))) | None => UploadMessageState::Closed,
+        Some(Err(_)) => {
+            counters.set_phase_error("NDT7 WebSocket 上传响应中断");
+            UploadMessageState::Failed
+        }
+        Some(Ok(_)) => UploadMessageState::Continue,
+    }
+}
+
+fn validated_server_duration(
+    candidate: Duration,
+    client_elapsed: Duration,
+    previous: Option<Duration>,
+) -> Option<Duration> {
+    let skew = Duration::from_secs(1);
+    let in_reasonable_range = candidate >= Duration::from_millis(100)
+        && candidate <= NDT7_MAX_TEST_DURATION + NDT7_CLOSE_GRACE;
+    let close_to_client_clock =
+        candidate <= client_elapsed + skew && client_elapsed <= candidate + skew;
+    let monotonic = previous.map(|value| candidate >= value).unwrap_or(true);
+    (in_reasonable_range && close_to_client_clock && monotonic).then_some(candidate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn reconnect_backoff_observes_cancellation() {
-        let token = CancellationToken::new();
-        token.cancel();
+    async fn download_uses_one_socket_and_stops_when_server_closes() {
+        use tokio::net::TcpListener;
 
-        assert!(!wait_before_reconnect(&token).await);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(450);
+            let mut accepted = 0;
+            while let Ok(Ok((stream, _))) =
+                tokio::time::timeout_at(deadline, listener.accept()).await
+            {
+                accepted += 1;
+                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                    continue;
+                };
+                let _ = ws.send(Message::Binary(vec![7; 4096].into())).await;
+                let _ = ws.close(None).await;
+            }
+            accepted
+        });
+        let node = ServerNodeInfo {
+            provider: super::super::model::PROVIDER_NDT7.into(),
+            dl_url: format!("ws://{address}/ndt/v7/download"),
+            ..Default::default()
+        };
+        let adapter = Ndt7Adapter::with_policy(&ProxyPolicy::from_parts("direct", "", "").unwrap());
+        let counters = Arc::new(ThroughputCounters::default());
+        adapter
+            .run_download(
+                &node,
+                counters.clone(),
+                PhaseConfig {
+                    duration: Duration::from_secs(2),
+                    streams: 8,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(counters.total(), 4096);
+        let (measurement_ms, warmup_bytes) = counters.measurement_timing().unwrap();
+        assert!((0.0..1200.0).contains(&measurement_ms));
+        assert_eq!(warmup_bytes, Some(4096));
+        assert_eq!(
+            server.await.unwrap(),
+            1,
+            "NDT7 must not open replacement streams"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_counts_server_confirmations_on_one_socket() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(450);
+            let mut accepted = 0;
+            let mut received_total = 0;
+            let mut first_frame_bytes = 0;
+            let mut largest_frame_bytes = 0;
+            while let Ok(Ok((stream, _))) =
+                tokio::time::timeout_at(deadline, listener.accept()).await
+            {
+                accepted += 1;
+                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                    continue;
+                };
+                while let Ok(Ok(Some(Ok(message)))) =
+                    tokio::time::timeout(Duration::from_millis(300), ws.next()).await
+                {
+                    if let Message::Binary(bytes) = message {
+                        if first_frame_bytes == 0 {
+                            first_frame_bytes = bytes.len();
+                        }
+                        largest_frame_bytes = largest_frame_bytes.max(bytes.len());
+                        received_total += bytes.len() as u64;
+                        let telemetry = serde_json::json!({
+                            "Origin": "server",
+                            "Test": "upload",
+                            "AppInfo": {
+                                "NumBytes": received_total,
+                                "ElapsedTime": 500_000
+                            }
+                        });
+                        if ws
+                            .send(Message::Text(telemetry.to_string().into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        if received_total >= 200_000 {
+                            break;
+                        }
+                    }
+                }
+                let _ = ws.close(None).await;
+            }
+            (
+                accepted,
+                received_total,
+                first_frame_bytes,
+                largest_frame_bytes,
+            )
+        });
+        let node = ServerNodeInfo {
+            provider: super::super::model::PROVIDER_NDT7.into(),
+            ul_url: format!("ws://{address}/ndt/v7/upload"),
+            ..Default::default()
+        };
+        let adapter = Ndt7Adapter::with_policy(&ProxyPolicy::from_parts("direct", "", "").unwrap());
+        let counters = Arc::new(ThroughputCounters::default());
+        adapter
+            .run_upload(
+                &node,
+                counters.clone(),
+                PhaseConfig {
+                    duration: Duration::from_secs(2),
+                    streams: 8,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        let (connections, received, first_frame_bytes, largest_frame_bytes) = server.await.unwrap();
+
+        assert_eq!(connections, 1, "NDT7 must use a single WebSocket");
+        assert!(received > 0);
+        assert_eq!(first_frame_bytes, WS_INITIAL_CHUNK_BYTES);
+        assert!(largest_frame_bytes > first_frame_bytes);
+        assert!(largest_frame_bytes <= WS_MAX_CHUNK_BYTES);
+        assert!(counters.sent() >= received);
+        assert!(counters.sent() - received <= WS_MAX_CHUNK_BYTES as u64);
+        assert_eq!(counters.accepted(), received);
+        assert_eq!(counters.total(), received);
+        let (measurement_ms, warmup) = counters.measurement_timing().unwrap();
+        assert!((100.0..=1_500.0).contains(&measurement_ms));
+        assert!(warmup.is_some());
+    }
+
+    #[test]
+    fn upload_telemetry_duration_must_be_monotonic_and_near_client_time() {
+        assert_eq!(
+            validated_server_duration(Duration::from_millis(150), Duration::from_millis(600), None),
+            Some(Duration::from_millis(150))
+        );
+        assert_eq!(
+            validated_server_duration(
+                Duration::from_millis(140),
+                Duration::from_millis(600),
+                Some(Duration::from_millis(150))
+            ),
+            None
+        );
+        assert_eq!(
+            validated_server_duration(Duration::from_millis(1), Duration::from_millis(600), None),
+            None
+        );
+        assert_eq!(
+            validated_server_duration(
+                Duration::from_millis(9_000),
+                Duration::from_millis(600),
+                None
+            ),
+            None
+        );
     }
 
     /// Locate API v2 真实响应结构(含访问令牌)
@@ -565,6 +908,18 @@ mod tests {
                 r#"{"Origin":"server","Test":"upload","AppInfo":{"NumBytes":1234}}"#
             ),
             Some(1234)
+        );
+        assert_eq!(
+            server_upload_measurement(
+                r#"{"Origin":"server","Test":"upload","AppInfo":{"NumBytes":1234,"ElapsedTime":500000}}"#
+            ),
+            Some((1234, Some(Duration::from_micros(500_000))))
+        );
+        assert_eq!(
+            server_upload_measurement(
+                r#"{"Origin":"server","Test":"upload","AppInfo":{"NumBytes":1234,"ElapsedTime":0}}"#
+            ),
+            Some((1234, None))
         );
         assert_eq!(
             server_confirmed_upload_bytes(
@@ -630,7 +985,41 @@ mod tests {
             to_ws_url("ws://h.example/x").as_deref(),
             Some("ws://h.example/x")
         );
+        assert_eq!(
+            to_ws_url("http://h.example/x").as_deref(),
+            Some("ws://h.example/x")
+        );
         assert_eq!(to_ws_url("ftp://x"), None);
+    }
+
+    #[tokio::test]
+    async fn unsupported_proxy_is_not_counted_as_an_http_failure() {
+        let policy = ProxyPolicy::from_parts("manual", "http://127.0.0.1:7890", "").unwrap();
+        let adapter = Ndt7Adapter::with_policy(&policy);
+        let node = ServerNodeInfo {
+            provider: super::super::model::PROVIDER_NDT7.into(),
+            dl_url: "ws://127.0.0.1:1/ndt/v7/download".into(),
+            ..Default::default()
+        };
+        let counters = Arc::new(ThroughputCounters::default());
+
+        adapter
+            .run_download(
+                &node,
+                counters.clone(),
+                PhaseConfig {
+                    duration: Duration::from_secs(2),
+                    streams: 1,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(counters.failure_count(), 0);
+        assert_eq!(
+            counters.phase_error().as_deref(),
+            Some("当前代理模式不支持 NDT7 WebSocket 隧道")
+        );
     }
 
     #[test]

@@ -59,7 +59,7 @@ export function StatusBar() {
       </div>
       <div className="seg">
         <Icon name="server" size={13} />
-        {node ? <b>{node.name}</b> : "自动选择节点"}
+        {node ? <b className="statusbar-node" title={node.name}>{node.name}</b> : "自动选择节点"}
       </div>
       <div className="seg">
         <Icon name="zap" size={13} />

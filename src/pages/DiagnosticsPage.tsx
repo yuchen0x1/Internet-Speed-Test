@@ -574,7 +574,7 @@ function DiagHistoryPanel() {
       {detail && (
         <Modal title={`${KIND_LABEL[detail.row.kind] ?? detail.row.kind} · ${detail.row.created_at}`} onClose={() => setDetail(null)} width={720}>
           <pre style={{
-            margin: 0, fontSize: 11.5, lineHeight: 1.6, maxHeight: 420, overflow: "auto",
+            margin: 0, fontSize: 11.5, lineHeight: 1.6,
             background: "rgba(5,8,16,.5)", padding: 12, borderRadius: 10,
             whiteSpace: "pre-wrap", wordBreak: "break-all",
           }}>{prettyJson(detail.json)}</pre>
