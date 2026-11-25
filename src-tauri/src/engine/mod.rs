@@ -52,6 +52,8 @@ pub enum EventSink {
     App(tauri::AppHandle),
     /// CLI:标准通道(供外部线程实时读取)
     Chan(std::sync::mpsc::Sender<EngineEvent>),
+    /// 候选节点验证阶段收集结果但不污染当前 UI/CLI 状态。
+    Discard,
 }
 
 impl EventSink {
@@ -65,6 +67,7 @@ impl EventSink {
             EventSink::Chan(tx) => {
                 let _ = tx.send(ev);
             }
+            EventSink::Discard => {}
         }
     }
 
@@ -354,6 +357,8 @@ impl SpeedTestEngine {
         cfg: &EngineConfig,
         t0: Instant,
     ) -> Result<bool, String> {
+        let discard_events = EventSink::Discard;
+
         // ---------- 阶段一:准备 ----------
         self.set_phase(sink, TestPhase::Preparing, "正在检查网络连接与本地接口");
         let ifaces = diagnostics::collect_interfaces();
@@ -460,11 +465,7 @@ impl SpeedTestEngine {
                 );
             }
             let mut switched = None;
-            for candidate in fallback_nodes
-                .iter()
-                .filter(|candidate| candidate.id != node.id)
-                .take(1)
-            {
+            for candidate in fallback_candidates(&fallback_nodes, &node.id) {
                 if token.is_cancelled() {
                     continue;
                 }
@@ -502,22 +503,22 @@ impl SpeedTestEngine {
             return Ok(false);
         }
         if latency.is_none() && cfg.auto_select {
-            for candidate in fallback_nodes
-                .iter()
-                .filter(|candidate| candidate.id != node.id)
-                .take(1)
-            {
+            for candidate in fallback_candidates(&fallback_nodes, &node.id) {
                 if token.is_cancelled() {
                     continue;
                 }
                 if registry.ping_node(candidate, token).await.is_err() {
                     continue;
                 }
-                sink.emit(EngineEvent::Server {
-                    node: candidate.clone(),
-                });
                 if let Some(candidate_latency) = self
-                    .measure_latency_phase(sink, registry, candidate, ping_count, token, t0)
+                    .measure_latency_phase(
+                        &discard_events,
+                        registry,
+                        candidate,
+                        ping_count,
+                        token,
+                        t0,
+                    )
                     .await?
                 {
                     node = candidate.clone();
@@ -557,22 +558,22 @@ impl SpeedTestEngine {
             .await;
         let down_failures;
         if matches!(&dl, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
-            for candidate in fallback_nodes
-                .iter()
-                .filter(|candidate| candidate.id != node.id)
-                .take(1)
-            {
+            for candidate in fallback_candidates(&fallback_nodes, &node.id) {
                 if token.is_cancelled() {
                     continue;
                 }
                 if registry.ping_node(candidate, token).await.is_err() {
                     continue;
                 }
-                sink.emit(EngineEvent::Server {
-                    node: candidate.clone(),
-                });
                 let Some(candidate_latency) = self
-                    .measure_latency_phase(sink, registry, candidate, ping_count, token, t0)
+                    .measure_latency_phase(
+                        &discard_events,
+                        registry,
+                        candidate,
+                        ping_count,
+                        token,
+                        t0,
+                    )
                     .await?
                 else {
                     continue;
@@ -580,7 +581,7 @@ impl SpeedTestEngine {
                 let mut candidate_samples = Vec::new();
                 let candidate_dl = self
                     .run_throughput_phase(
-                        sink,
+                        &discard_events,
                         registry,
                         candidate,
                         "download",
@@ -648,18 +649,22 @@ impl SpeedTestEngine {
             )
             .await;
         if matches!(&ul, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
-            for candidate in &fallback_nodes {
+            for candidate in fallback_candidates(&fallback_nodes, &node.id) {
                 if candidate.id == node.id || token.is_cancelled() {
                     continue;
                 }
                 if registry.ping_node(candidate, token).await.is_err() {
                     continue;
                 }
-                sink.emit(EngineEvent::Server {
-                    node: candidate.clone(),
-                });
                 let Some(candidate_latency) = self
-                    .measure_latency_phase(sink, registry, candidate, ping_count, token, t0)
+                    .measure_latency_phase(
+                        &discard_events,
+                        registry,
+                        candidate,
+                        ping_count,
+                        token,
+                        t0,
+                    )
                     .await?
                 else {
                     continue;
@@ -667,7 +672,7 @@ impl SpeedTestEngine {
                 let mut candidate_down_samples = Vec::new();
                 let candidate_dl = self
                     .run_throughput_phase(
-                        sink,
+                        &discard_events,
                         registry,
                         candidate,
                         "download",
@@ -693,7 +698,7 @@ impl SpeedTestEngine {
                 let mut candidate_samples = Vec::new();
                 let candidate_ul = self
                     .run_throughput_phase(
-                        sink,
+                        &discard_events,
                         registry,
                         candidate,
                         "upload",
@@ -707,6 +712,7 @@ impl SpeedTestEngine {
                 if matches!(&candidate_ul, PhaseOutcome::Ok(bytes, ..) if *bytes > 0) {
                     node = candidate.clone();
                     result.server = Some(node.clone());
+                    sink.emit(EngineEvent::Server { node: node.clone() });
                     result.latency_samples = candidate_latency.0;
                     result.idle_ping_ms = candidate_latency.1;
                     result.ping_min_ms = candidate_latency.2;
@@ -940,6 +946,16 @@ fn connectivity_failure(token: &CancellationToken, error: String) -> Result<bool
     }
 }
 
+fn fallback_candidates<'a>(
+    nodes: &'a [ServerNodeInfo],
+    current_id: &str,
+) -> Vec<&'a ServerNodeInfo> {
+    nodes
+        .iter()
+        .filter(|candidate| candidate.id.as_str() != current_id)
+        .collect()
+}
+
 /// 手动指定节点不在列表中时的兜底:仅接受合法 HTTPS URL,按 LibreSpeed 默认端点构造。
 /// 不猜参数、不降级为 HTTP;能否测速由后续真实请求验证,失败会如实上报。
 pub fn manual_node_fallback(url: &str) -> Option<ServerNodeInfo> {
@@ -1089,6 +1105,27 @@ mod tests {
 
         token.cancel();
         assert_eq!(connectivity_failure(&token, "请求已取消".into()), Ok(false));
+    }
+
+    #[test]
+    fn test_fallback_candidates_include_every_alternative_node() {
+        let nodes = ["selected", "unavailable", "available"]
+            .into_iter()
+            .map(|id| ServerNodeInfo {
+                id: id.into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+
+        let candidates = fallback_candidates(&nodes, "selected");
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<Vec<_>>(),
+            ["unavailable", "available"]
+        );
     }
 
     #[test]

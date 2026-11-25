@@ -12,8 +12,10 @@ use super::model::ServerNodeInfo;
 /// 吞吐计数器(多流共享,原子累加)
 #[derive(Debug, Default)]
 pub struct ThroughputCounters {
-    /// 客户端已从请求体读取并交给 HTTP 栈的字节数。
+    /// 用于测速样本的有效字节:下载为接收量,上传为服务端确认量。
     pub total_bytes: AtomicU64,
+    /// 客户端已交给传输层的上传字节数,不等同于服务端确认量。
+    pub sent_bytes: AtomicU64,
     /// 服务端返回成功状态后确认接受的上传字节数。
     pub accepted_bytes: AtomicU64,
     /// 吞吐阶段 HTTP 请求失败次数(与 ICMP 丢包严格区分)
@@ -24,8 +26,14 @@ impl ThroughputCounters {
     pub fn add_bytes(&self, n: u64) {
         self.total_bytes.fetch_add(n, Ordering::Relaxed);
     }
+    pub fn add_sent(&self, n: u64) {
+        self.sent_bytes.fetch_add(n, Ordering::Relaxed);
+    }
     pub fn total(&self) -> u64 {
         self.total_bytes.load(Ordering::Relaxed)
+    }
+    pub fn sent(&self) -> u64 {
+        self.sent_bytes.load(Ordering::Relaxed)
     }
     pub fn add_accepted(&self, n: u64) {
         self.accepted_bytes.fetch_add(n, Ordering::Relaxed);
@@ -139,7 +147,11 @@ mod tests {
         let c = ThroughputCounters::default();
         c.add_bytes(1000);
         c.add_bytes(500);
-        assert_eq!(c.total(), 1500);
+        c.add_sent(2000);
+        c.commit_accepted(1000);
+        assert_eq!(c.total(), 2500);
+        assert_eq!(c.sent(), 2000);
+        assert_eq!(c.accepted(), 1000);
         c.add_failure();
         assert_eq!(c.failure_count(), 1);
     }

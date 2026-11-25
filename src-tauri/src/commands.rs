@@ -1836,10 +1836,12 @@ mod tests {
 
     #[test]
     fn diagnostic_proxy_policy_uses_saved_settings() {
-        let mut settings = AppSettings::default();
-        settings.proxy_mode = "manual".into();
-        settings.proxy_url = "http://127.0.0.1:7890".into();
-        settings.proxy_bypass = "localhost,*.internal".into();
+        let settings = AppSettings {
+            proxy_mode: "manual".into(),
+            proxy_url: "http://127.0.0.1:7890".into(),
+            proxy_bypass: "localhost,*.internal".into(),
+            ..AppSettings::default()
+        };
 
         let policy = proxy_policy_from_settings(&settings).unwrap();
 
@@ -1850,8 +1852,10 @@ mod tests {
 
     #[test]
     fn diagnostic_proxy_policy_rejects_invalid_saved_manual_proxy() {
-        let mut settings = AppSettings::default();
-        settings.proxy_mode = "manual".into();
+        let settings = AppSettings {
+            proxy_mode: "manual".into(),
+            ..AppSettings::default()
+        };
 
         let error = proxy_policy_from_settings(&settings).unwrap_err();
 

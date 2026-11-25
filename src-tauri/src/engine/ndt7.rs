@@ -266,6 +266,14 @@ fn ws_request(url: &str) -> Result<Request<()>, String> {
     Ok(req)
 }
 
+fn server_confirmed_upload_bytes(message: &str) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(message).ok()?;
+    if value.get("Origin")?.as_str()? != "server" || value.get("Test")?.as_str()? != "upload" {
+        return None;
+    }
+    value.get("AppInfo")?.get("NumBytes")?.as_u64()
+}
+
 async fn ws_connect(
     url: &str,
     token: &CancellationToken,
@@ -394,25 +402,72 @@ impl ProviderAdapter for Ndt7Adapter {
             let pool = pool.clone();
             set.spawn(async move {
                 while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
-                    let mut ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
+                    let ws = match ws_connect(&url, &token, websocket_direct_allowed).await {
                         Ok(s) => s,
                         Err(_) => {
-                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            tokio::select! {
+                                _ = token.cancelled() => return,
+                                _ = tokio::time::sleep(Duration::from_millis(300)) => {}
+                            }
                             continue;
                         }
                     };
+                    let (mut writer, mut reader) = ws.split();
+                    let connection_token = token.child_token();
+                    let reader_token = connection_token.clone();
+                    let reader_counters = counters.clone();
+                    let reader_task = tokio::spawn(async move {
+                        let mut confirmed_bytes = 0;
+                        loop {
+                            let message = tokio::select! {
+                                _ = reader_token.cancelled() => break,
+                                message = reader.next() => message,
+                            };
+                            match message {
+                                Some(Ok(Message::Text(text))) => {
+                                    if let Some(total) =
+                                        server_confirmed_upload_bytes(text.as_str())
+                                    {
+                                        if let Some(delta) = total.checked_sub(confirmed_bytes) {
+                                            reader_counters.commit_accepted(delta);
+                                            confirmed_bytes = total;
+                                        }
+                                    }
+                                }
+                                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                                Some(Ok(_)) => {}
+                            }
+                        }
+                    });
                     let mut off = 0usize;
                     loop {
                         if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
-                            return;
+                            break;
+                        }
+                        if reader_task.is_finished() {
+                            break;
                         }
                         let end = (off + WS_CHUNK_BYTES).min(pool.len());
                         let chunk = pool[off..end].to_vec();
                         off = if end >= pool.len() { 0 } else { end };
-                        match ws.send(Message::Binary(chunk.clone().into())).await {
-                            Ok(()) => counters.add_bytes(chunk.len() as u64),
-                            Err(_) => break, // 传输错误不归入 HTTP 请求失败。
+                        let send_result = tokio::select! {
+                            _ = token.cancelled() => break,
+                            _ = tokio::time::sleep_until(deadline) => break,
+                            result = writer.send(Message::Binary(chunk.clone().into())) => result,
+                        };
+                        match send_result {
+                            Ok(()) => counters.add_sent(chunk.len() as u64),
+                            Err(_) => break,
                         }
+                    }
+                    connection_token.cancel();
+                    let _ = reader_task.await;
+                    if token.is_cancelled() || tokio::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    tokio::select! {
+                        _ = token.cancelled() => return,
+                        _ = tokio::time::sleep(Duration::from_millis(300)) => {}
                     }
                 }
             });
@@ -477,6 +532,32 @@ mod tests {
             .ends_with("/ndt/v7/upload?access_token=abc123"));
         assert!(n.getip_url.is_empty(), "NDT7 不提供 IP 接口");
         assert!(!n.allow_http, "wss 节点不应标记为未加密");
+    }
+
+    #[test]
+    fn test_upload_measurement_requires_server_confirmation() {
+        assert_eq!(
+            server_confirmed_upload_bytes(
+                r#"{"Origin":"server","Test":"upload","AppInfo":{"NumBytes":1234}}"#
+            ),
+            Some(1234)
+        );
+        assert_eq!(
+            server_confirmed_upload_bytes(
+                r#"{"Origin":"client","Test":"upload","AppInfo":{"NumBytes":1234}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            server_confirmed_upload_bytes(
+                r#"{"Origin":"server","Test":"download","AppInfo":{"NumBytes":1234}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            server_confirmed_upload_bytes(r#"{"Origin":"server","Test":"upload"}"#),
+            None
+        );
     }
 
     /// 真实 Locate v2 响应结构:`{"results":[...]}`,同时给 ws 与 wss
