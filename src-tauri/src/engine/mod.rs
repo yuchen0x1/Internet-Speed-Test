@@ -555,7 +555,7 @@ impl SpeedTestEngine {
                 &mut down_samples,
             )
             .await;
-        let mut down_failures = 0;
+        let down_failures;
         if matches!(&dl, PhaseOutcome::Failed(_) | PhaseOutcome::Ok(0, ..)) && cfg.auto_select {
             for candidate in fallback_nodes
                 .iter()

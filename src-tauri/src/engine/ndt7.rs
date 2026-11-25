@@ -58,6 +58,7 @@ impl Ndt7Adapter {
                 &format!("NetVisionPro/{}", env!("CARGO_PKG_VERSION")),
                 Duration::from_secs(6),
             )
+            .expect("构建 NDT7 HTTP 客户端策略失败")
             .timeout(Duration::from_secs(10))
             .build()
             .expect("构建 NDT7 HTTP 客户端失败");
