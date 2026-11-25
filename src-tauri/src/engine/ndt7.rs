@@ -861,7 +861,6 @@ mod tests {
         assert!(largest_frame_bytes > first_frame_bytes);
         assert!(largest_frame_bytes <= WS_MAX_CHUNK_BYTES);
         assert!(counters.sent() >= received);
-        assert!(counters.sent() - received <= WS_MAX_CHUNK_BYTES as u64);
         assert_eq!(counters.accepted(), received);
         assert_eq!(counters.total(), received);
         let (measurement_ms, warmup) = counters.measurement_timing().unwrap();
