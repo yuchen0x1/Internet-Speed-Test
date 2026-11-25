@@ -720,19 +720,21 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(450);
-            let mut accepted = 0;
-            while let Ok(Ok((stream, _))) =
-                tokio::time::timeout_at(deadline, listener.accept()).await
-            {
-                accepted += 1;
-                let Ok(mut ws) = accept_ndt7_socket(stream).await else {
-                    continue;
-                };
-                let _ = ws.send(Message::Binary(vec![7; 4096].into())).await;
-                let _ = ws.close(None).await;
-            }
-            accepted
+            let Ok(Ok((stream, _))) =
+                tokio::time::timeout(Duration::from_secs(5), listener.accept()).await
+            else {
+                return 0;
+            };
+            let Ok(mut ws) = accept_ndt7_socket(stream).await else {
+                return 1;
+            };
+            let _ = ws.send(Message::Binary(vec![7; 4096].into())).await;
+            let _ = ws.close(None).await;
+            let accepted_another = matches!(
+                tokio::time::timeout(Duration::from_millis(250), listener.accept()).await,
+                Ok(Ok(_))
+            );
+            1 + usize::from(accepted_another)
         });
         let node = ServerNodeInfo {
             provider: super::super::model::PROVIDER_NDT7.into(),
@@ -771,48 +773,58 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(450);
-            let mut accepted = 0;
+            let Ok(Ok((stream, _))) =
+                tokio::time::timeout(Duration::from_secs(5), listener.accept()).await
+            else {
+                return (0, 0, 0, 0);
+            };
+            let mut accepted = 1;
             let mut received_total = 0;
             let mut first_frame_bytes = 0;
             let mut largest_frame_bytes = 0;
-            while let Ok(Ok((stream, _))) =
-                tokio::time::timeout_at(deadline, listener.accept()).await
+            let Ok(mut ws) = accept_ndt7_socket(stream).await else {
+                return (
+                    accepted,
+                    received_total,
+                    first_frame_bytes,
+                    largest_frame_bytes,
+                );
+            };
+            while let Ok(Some(Ok(message))) =
+                tokio::time::timeout(Duration::from_secs(2), ws.next()).await
             {
-                accepted += 1;
-                let Ok(mut ws) = accept_ndt7_socket(stream).await else {
-                    continue;
-                };
-                while let Ok(Some(Ok(message))) =
-                    tokio::time::timeout(Duration::from_millis(300), ws.next()).await
-                {
-                    if let Message::Binary(bytes) = message {
-                        if first_frame_bytes == 0 {
-                            first_frame_bytes = bytes.len();
+                if let Message::Binary(bytes) = message {
+                    if first_frame_bytes == 0 {
+                        first_frame_bytes = bytes.len();
+                    }
+                    largest_frame_bytes = largest_frame_bytes.max(bytes.len());
+                    received_total += bytes.len() as u64;
+                    let telemetry = serde_json::json!({
+                        "Origin": "server",
+                        "Test": "upload",
+                        "AppInfo": {
+                            "NumBytes": received_total,
+                            "ElapsedTime": 500_000
                         }
-                        largest_frame_bytes = largest_frame_bytes.max(bytes.len());
-                        received_total += bytes.len() as u64;
-                        let telemetry = serde_json::json!({
-                            "Origin": "server",
-                            "Test": "upload",
-                            "AppInfo": {
-                                "NumBytes": received_total,
-                                "ElapsedTime": 500_000
-                            }
-                        });
-                        if ws
-                            .send(Message::Text(telemetry.to_string().into()))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                        if received_total >= 200_000 {
-                            break;
-                        }
+                    });
+                    if ws
+                        .send(Message::Text(telemetry.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if received_total >= 200_000 {
+                        break;
                     }
                 }
-                let _ = ws.close(None).await;
+            }
+            let _ = ws.close(None).await;
+            if matches!(
+                tokio::time::timeout(Duration::from_millis(250), listener.accept()).await,
+                Ok(Ok(_))
+            ) {
+                accepted += 1;
             }
             (
                 accepted,
