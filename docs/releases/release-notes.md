@@ -2,33 +2,37 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.15.2` 为待发布候选版本；正式发布状态以 GitHub Releases 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
+`v1.15.2` 是本轮代理、测速可靠性与桌面布局维护版本；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.2) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
 
 <a id="v1-15-2"></a>
 
-## v1.15.2 (待发布候选；2026-11-25)
+## v1.15.2 (2026-11-25)
+
+源码提交：[b177a5d](https://github.com/yuchen0x1/Internet-Speed-Test/commit/b177a5d2bbd3c3c86f71b6e376d39d903118923e)。本轮修复由 [PR #19](https://github.com/yuchen0x1/Internet-Speed-Test/pull/19)、[PR #20](https://github.com/yuchen0x1/Internet-Speed-Test/pull/20) 和 [PR #21](https://github.com/yuchen0x1/Internet-Speed-Test/pull/21) 合入；下述核验范围优先于早期开发记录中未经本次复核的通过声明。
 
 - 统一 HTTP 测速、节点发现与 HTTP 诊断的代理策略，支持自动、直连和手动模式；系统 PAC/WPAD 会明确提示不可用，不会静默退回直连。
 - 在设置和节点页面显示代理状态及 NDT7 WebSocket 的兼容限制；不支持代理隧道时明确说明并跳过该协议。NDT7 使用单条 WebSocket、单阶段最长 10 秒；传输失败会交给备用节点策略处理，不再重连拼接数据。
 - 修复测速阶段的取消清理、备用节点切换和节点间实时样本串流；上传速度按服务端成功响应确认的块计数，取消响应排空任务随阶段回收。
 - 重排设置与多页面内容网格，减少不均衡空白和嵌套表格滚动；诊断任务防止重复启动及过期结果覆盖。
 - 将 `url` 更新至 2.5.9、`cookie` 更新至 0.18.3，修复 2026-11 RustSec 公告，不通过忽略审计项规避。
-- 验证：此前合入 PR 的前端 13 个测试文件、81 项测试，TypeScript、生产构建、IPC、版本、文档及依赖安全检查通过；该候选分支新增的 NDT7 单连接与错误传播修复仍须以本分支 CI 为准。Windows Tauri 1.15.2 候选安装包曾启动并截取测速页；其余页面的浏览器布局检查使用模拟 IPC，不能算作安装版验收。
-- 桌面布局验收：PARTIAL。当前尚无可核验的安装版全页面、设置顶部/中部/底部及深浅主题截图，也没有完成 1280×720、1366×768、1600×900、1920×1080、2560×1440 和 100%、125%、150%、200% DPI 全矩阵；发布前不得将模拟 IPC 结果表述为真实桌面验收。
-- 未覆盖：完整的 HTTP/HTTPS 代理认证、故障、切换与断连恢复矩阵；中国大陆网络；跨地区及受限网络下所有测速协议。Windows Authenticode 发布者签名不在当前发布流程中；正式发布时将由工作流生成并核验 Tauri updater 签名、`latest.json` 和 SHA256 清单。
+- 验证：本地前端 13 个测试文件、81 项测试和生产构建通过；[PR #21 CI](https://github.com/yuchen0x1/Internet-Speed-Test/pull/21/checks) 的 TypeScript、Rust 格式、严格 Clippy、单元测试、依赖审计和四平台 headless 检查通过。[Windows QA 工作流 45593354652](https://github.com/yuchen0x1/Internet-Speed-Test/actions/runs/45593354652) 使用相同源码树，Rust 测试 120 通过、0 失败、4 个真实网络测试按标记跳过，并完成 NSIS 安装包及 updater 签名构建。
+- QA 产物：安装包版本为 1.15.2，安装包和 4 个 CLI 归档的 SHA256 均与清单一致；使用实际 updater 公钥验证安装包 Ed25519 签名及绑定 `version:1.15.2` 的 trusted comment 通过。正式公开资产由[标签发布工作流](https://github.com/yuchen0x1/Internet-Speed-Test/actions/runs/45595764360)生成；QA 产物验证不代替公开下载核验。
+- 桌面布局验收：PARTIAL。当前尚无可核验的最终源码安装版全页面、设置顶部/中部/底部及深浅主题截图，也没有完成 1280×720、1366×768、1600×900、1920×1080、2560×1440 和 100%、125%、150%、200% DPI 全矩阵；不得将早期版本截图、模拟 IPC 或 CI 结果表述为本版真实桌面验收。
+- 更新兼容：保留 v1.15.0 的产品标识、稳定版更新端点和公钥，默认启动检查与手动检查路径不变。GitHub 可达且自动检查启用时，旧版具有发现新版本的代码路径；旧版覆盖安装、重启与回退仍未完成真实端到端验收。更新器尚未接入应用保存的手动代理策略。
+- 未覆盖：完整的 HTTP/HTTPS 代理认证、故障、切换与断连恢复矩阵；中国大陆网络；跨地区及受限网络下所有测速协议；30 次连续测速和至少 30 分钟的稳定性验收。PAC/WPAD 执行和 NDT7 WebSocket 代理隧道未实现。Windows Authenticode 发布者签名不在当前发布流程中；Tauri updater 签名不等同于 Windows 发布者证书。
 
 <a id="v1-15-1"></a>
 
-## v1.15.1 (待发布；2026-11-20 准备)
+## v1.15.1 (未独立发布；2026-11-20 准备)
 
 本版为维护补丁，仅包含以下修复；CLI、测速引擎及语言切换等已有能力沿用此前版本。
 
 - 为 Windows 专用 Wi-Fi 解析函数及其测试、ICMP 载荷常量补充 `#[cfg(windows)]`，修复 Linux/macOS headless 构建在 `--no-default-features` 严格 Clippy `-D warnings` 下的 dead-code 失败，不放宽 lint。
 - 补齐 v1.15.0 发布日志的稳定锚点，并通过 `npm run docs:sync` 同步根目录 `CHANGELOG.md`，修复发布文档检查。
 
-修复已由 [PR #16](https://github.com/yuchen0x1/Internet-Speed-Test/pull/16) 合入，基线提交为 [42cd146](https://github.com/yuchen0x1/Internet-Speed-Test/commit/42cd14694297535e7cce884d549c1a09a5cf549f)。本条记录仅准备 1.15.1 版本与说明，尚未创建该版本 tag 或 Release；发布仍须通过现有版本、文档、IPC、依赖审计、测试、headless 多平台与签名门禁。
+修复已由 [PR #16](https://github.com/yuchen0x1/Internet-Speed-Test/pull/16) 合入，基线提交为 [42cd146](https://github.com/yuchen0x1/Internet-Speed-Test/commit/42cd14694297535e7cce884d549c1a09a5cf549f)。1.15.1 未创建独立 tag 或 Release；修复随 v1.15.2 一并交付，不复用或移动旧版本标签。
 
 <a id="v1-15-0"></a>
 
@@ -56,8 +60,8 @@
 
 | 版本 | 日期与状态 | 主要变化 |
 | --- | --- | --- |
-| [v1.15.2](#v1-15-2) | 2026-11-25 候选 · 待发布 | 代理与测速恢复、全局布局、依赖安全修复 |
-| [v1.15.1](#v1-15-1) | 2026-11-20 准备 · 待发布 | Windows 专用 cfg 与发布文档锚点、镜像同步修复 |
+| [v1.15.2](#v1-15-2) | 2026-11-25 · [Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.2) | 代理与测速恢复、全局布局、依赖安全修复；真实环境验收仍有 PARTIAL 项 |
+| [v1.15.1](#v1-15-1) | 未独立发布 · 随 v1.15.2 交付 | Windows 专用 cfg 与发布文档锚点、镜像同步修复 |
 | [v1.15.0](#v1-15-0) | 2026-11-20 发布 · 2026-11-24 补齐资产、mutable | 历史功能记录；旧 tag 不含 PR #16 修复 |
 | [v1.14.1](#v1-14-1) | 2026-11-17 · 未发布 | 自动语言选择、手动切换和核心壳层本地化 |
 | [v1.14.0](#v1-14-0) | 2026-11-16 · 本次发布 | 历史筛选、诊断编排/报告、设置备份、监控聚合/导出、CLI 与 IPC 契约、键盘与可访问性 |
