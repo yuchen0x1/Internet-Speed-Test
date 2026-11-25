@@ -690,6 +690,28 @@ fn validated_server_duration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as ServerRequest, Response as ServerResponse,
+    };
+
+    async fn accept_ndt7_socket(
+        stream: tokio::net::TcpStream,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        tokio_tungstenite::tungstenite::Error,
+    > {
+        tokio_tungstenite::accept_hdr_async(
+            stream,
+            |_request: &ServerRequest, mut response: ServerResponse| {
+                response.headers_mut().insert(
+                    SEC_WEBSOCKET_PROTOCOL,
+                    HeaderValue::from_static(NDT7_SUBPROTOCOL),
+                );
+                Ok(response)
+            },
+        )
+        .await
+    }
 
     #[tokio::test]
     async fn download_uses_one_socket_and_stops_when_server_closes() {
@@ -704,7 +726,7 @@ mod tests {
                 tokio::time::timeout_at(deadline, listener.accept()).await
             {
                 accepted += 1;
-                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                let Ok(mut ws) = accept_ndt7_socket(stream).await else {
                     continue;
                 };
                 let _ = ws.send(Message::Binary(vec![7; 4096].into())).await;
@@ -758,7 +780,7 @@ mod tests {
                 tokio::time::timeout_at(deadline, listener.accept()).await
             {
                 accepted += 1;
-                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                let Ok(mut ws) = accept_ndt7_socket(stream).await else {
                     continue;
                 };
                 while let Ok(Some(Ok(message))) =
