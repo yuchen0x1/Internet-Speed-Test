@@ -4,7 +4,7 @@ import { api, errMsg, onUpdaterProgress } from "../api";
 import { useApp } from "../store/app";
 import { useServers } from "../store/test";
 import { fmtBytes, isCancelError } from "../lib/format";
-import { ConfirmModal, Segmented } from "../components/ui";
+import { ConfirmModal, Segmented, SettingRow } from "../components/ui";
 import { Icon } from "../components/Icon";
 import type { PrometheusStatus, ProxyRuntimeStatus, UpdaterInfo } from "../types";
 import { useI18n, type LocaleSetting } from "../i18n";
@@ -173,300 +173,302 @@ export function SettingsPage() {
       </div>
 
       <div className="settings-grid">
-        <section className="card pad settings-section settings-section--appearance">
-          <div className="chart-title"><Icon name="eye" size={15} /> 通用设置与外观</div>
-          <div className="chart-title mt12"><Icon name="globe" size={15} /> {t("language")}</div>
-          <div className="set-row">
-            <div>
-              <div className="label">{t("language")}</div>
-              <div className="desc">{t("languageHint")}</div>
-            </div>
-            <select className="select" value={localeSetting} onChange={(e) => setLocaleSetting(e.target.value as LocaleSetting)}>
-              <option value="auto">{t("auto")}</option>
-              <option value="zh-CN">简体中文</option>
-              <option value="en-US">English</option>
-            </select>
-          </div>
-          <div className="chart-title mt12"><Icon name="eye" size={15} /> 外观</div>
-          <div className="set-row">
-            <div>
-              <div className="label">主题</div>
-              <div className="desc">跟随系统时自动切换明暗</div>
-            </div>
-            <Segmented
-              value={settings.theme}
-              onChange={(v) => upd({ theme: v })}
-              options={[
-                { value: "dark", label: "深色" },
-                { value: "light", label: "浅色" },
-                { value: "system", label: "跟随系统" },
-              ]}
-            />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">动画效果</div>
-              <div className="desc">关闭后所有过渡与动效立即结束,界面更省电</div>
-            </div>
-            <button className={`toggle ${settings.animations ? "on" : ""}`} onClick={() => upd({ animations: !settings.animations })} aria-label="动画效果" />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">动效强度</div>
-              <div className="desc">{settings.anim_intensity.toFixed(1)}×(影响动画时长)</div>
-            </div>
-            <input
-              type="range" min={0.5} max={1.5} step={0.1} style={{ width: 150 }}
-              value={settings.anim_intensity}
-              onChange={(e) => upd({ anim_intensity: Number(e.target.value) })}
-              disabled={!settings.animations}
-            />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">数据刷新频率</div>
-              <div className="desc">监控图表的数据刷新间隔</div>
-            </div>
-            <select
-              className="select"
-              value={settings.refresh_interval_ms}
-              onChange={(e) => upd({ refresh_interval_ms: Number(e.target.value) })}
-            >
-              <option value={500}>0.5 秒</option>
-              <option value={1000}>1 秒</option>
-              <option value={2000}>2 秒</option>
-              <option value={5000}>5 秒</option>
-            </select>
-          </div>
-        </section>
+        <div className="settings-columns">
+          <div className="settings-column">
+            <section className="card pad settings-section settings-section--appearance">
+              <div className="chart-title"><Icon name="eye" size={15} /> 通用设置与外观</div>
+              <div className="chart-title mt12"><Icon name="globe" size={15} /> {t("language")}</div>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">{t("language")}</div>
+                  <div className="desc">{t("languageHint")}</div>
+                </div>
+                <select className="select" value={localeSetting} onChange={(e) => setLocaleSetting(e.target.value as LocaleSetting)}>
+                  <option value="auto">{t("auto")}</option>
+                  <option value="zh-CN">简体中文</option>
+                  <option value="en-US">English</option>
+                </select>
+              </SettingRow>
+              <div className="chart-title mt12"><Icon name="eye" size={15} /> 外观</div>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">主题</div>
+                  <div className="desc">跟随系统时自动切换明暗</div>
+                </div>
+                <Segmented
+                  value={settings.theme}
+                  onChange={(v) => upd({ theme: v })}
+                  options={[
+                    { value: "dark", label: "深色" },
+                    { value: "light", label: "浅色" },
+                    { value: "system", label: "跟随系统" },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">动画效果</div>
+                  <div className="desc">关闭后所有过渡与动效立即结束,界面更省电</div>
+                </div>
+                <button className={`toggle ${settings.animations ? "on" : ""}`} onClick={() => upd({ animations: !settings.animations })} aria-label="动画效果" />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">动效强度</div>
+                  <div className="desc">{settings.anim_intensity.toFixed(1)}×(影响动画时长)</div>
+                </div>
+                <input
+                  type="range" min={0.5} max={1.5} step={0.1} style={{ width: 150 }}
+                  value={settings.anim_intensity}
+                  onChange={(e) => upd({ anim_intensity: Number(e.target.value) })}
+                  disabled={!settings.animations}
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">数据刷新频率</div>
+                  <div className="desc">监控图表的数据刷新间隔</div>
+                </div>
+                <select
+                  className="select"
+                  value={settings.refresh_interval_ms}
+                  onChange={(e) => upd({ refresh_interval_ms: Number(e.target.value) })}
+                >
+                  <option value={500}>0.5 秒</option>
+                  <option value={1000}>1 秒</option>
+                  <option value={2000}>2 秒</option>
+                  <option value={5000}>5 秒</option>
+                </select>
+              </SettingRow>
+            </section>
 
-        {/* 测速 */}
-        <section className="card pad settings-section settings-section--speed">
-          <div className="chart-title"><Icon name="gauge" size={15} /> 测速</div>
-          <div className="set-row">
-            <div>
-              <div className="label">节点选择方式</div>
-              <div className="desc">自动优选会综合延迟、可用性与下载能力</div>
-            </div>
-            <Segmented
-              value={settings.node_mode}
-              onChange={(v) => upd({ node_mode: v })}
-              options={[
-                { value: "auto", label: "自动优选" },
-                { value: "manual", label: "手动指定" },
-              ]}
-            />
+            <section className="card pad settings-section settings-section--monitoring">
+              <div className="chart-title"><Icon name="activity" size={15} /> 后台监控与系统行为</div>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">后台网络监控</div>
+                  <div className="desc">每秒采样网卡流量;关闭后零开销</div>
+                </div>
+                <button
+                  className={`toggle ${settings.monitor_enabled ? "on" : ""}`}
+                  onClick={async () => {
+                    const next = !settings.monitor_enabled;
+                    await upd({ monitor_enabled: next });
+                  }}
+                  aria-label="后台监控"
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">状态栏显示实时流量</div>
+                  <div className="desc">在标题栏与状态栏显示当前收发速率</div>
+                </div>
+                <button className={`toggle ${settings.show_traffic ? "on" : ""}`} onClick={() => upd({ show_traffic: !settings.show_traffic })} aria-label="显示流量" />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">开机自动启动</div>
+                  <div className="desc">写入当前用户注册表 Run 项,可随时关闭</div>
+                </div>
+                <button
+                  className={`toggle ${settings.autostart ? "on" : ""}`}
+                  onClick={async () => {
+                    // updateSettings 内部吞错并返回 false:失败时不弹成功提示
+                    const ok = await upd({ autostart: !settings.autostart });
+                    if (ok) toast("success", !settings.autostart ? "已开启开机自启" : "已关闭开机自启");
+                    else toast("error", "自启动设置保存失败,请重试");
+                  }}
+                  aria-label="开机自启"
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">关闭窗口时最小化到托盘</div>
+                  <div className="desc">关闭按钮改为隐藏窗口,托盘可彻底退出</div>
+                </div>
+                <button className={`toggle ${settings.close_to_tray ? "on" : ""}`} onClick={() => upd({ close_to_tray: !settings.close_to_tray })} aria-label="关闭到托盘" />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">计划测速</div>
+                  <div className="desc">按设定间隔在后台自动执行真实测速并保存历史</div>
+                </div>
+                <button className={`toggle ${settings.auto_test_enabled ? "on" : ""}`} onClick={() => upd({ auto_test_enabled: !settings.auto_test_enabled })} aria-label="计划测速" />
+              </SettingRow>
+              {settings.auto_test_enabled && (
+                <SettingRow className="set-row">
+                  <div>
+                    <div className="label">测速间隔</div>
+                    <div className="desc">后台自动测速的执行频率(最小 15 分钟)</div>
+                  </div>
+                  <select
+                    className="select"
+                    value={settings.auto_test_interval_minutes}
+                    onChange={(e) => upd({ auto_test_interval_minutes: Number(e.target.value) })}
+                  >
+                    <option value={30}>30 分钟</option>
+                    <option value={60}>1 小时</option>
+                    <option value={120}>2 小时</option>
+                    <option value={360}>6 小时</option>
+                    <option value={720}>12 小时</option>
+                    <option value={1440}>24 小时</option>
+                  </select>
+                </SettingRow>
+              )}
+            </section>
           </div>
-          {settings.node_mode === "manual" && (
-            <div className="set-row">
-              <div>
-                <div className="label">默认节点</div>
-                <div className="desc">手动模式下使用的测速节点</div>
-              </div>
-              <select
-                className="select" style={{ maxWidth: 260 }}
-                value={settings.default_node_url}
-                onChange={(e) => upd({ default_node_url: e.target.value })}
-              >
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.base_url}>{n.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="set-row">
-            <div>
-              <div className="label">测速持续时间</div>
-              <div className="desc">{settings.test_duration_secs} 秒(下载与上传各一段;更长更稳)</div>
-            </div>
-            <input
-              type="range" min={5} max={30} step={1} style={{ width: 150 }}
-              value={settings.test_duration_secs}
-              onChange={(e) => upd({ test_duration_secs: Number(e.target.value) })}
-            />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">精度模式</div>
-              <div className="desc">更多并发与更密的采样,耗时略增</div>
-            </div>
-            <button className={`toggle ${settings.precision_mode ? "on" : ""}`} onClick={() => upd({ precision_mode: !settings.precision_mode })} aria-label="精度模式" />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">下载并发连接</div>
-              <div className="desc">{settings.down_concurrency} 条(1-16,多流可对抗单流限速)</div>
-            </div>
-            <input
-              type="range" min={1} max={16} step={1} style={{ width: 150 }}
-              value={settings.down_concurrency}
-              onChange={(e) => upd({ down_concurrency: Number(e.target.value) })}
-            />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">上传并发连接</div>
-              <div className="desc">{settings.up_concurrency} 条(1-8)</div>
-            </div>
-            <input
-              type="range" min={1} max={8} step={1} style={{ width: 150 }}
-              value={settings.up_concurrency}
-              onChange={(e) => upd({ up_concurrency: Number(e.target.value) })}
-            />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">自动保存测速记录</div>
-              <div className="desc">完成 / 取消 / 失败的测试均如实入库</div>
-            </div>
-            <button className={`toggle ${settings.autosave_history ? "on" : ""}`} onClick={() => upd({ autosave_history: !settings.autosave_history })} aria-label="自动保存" />
-          </div>
-        </section>
+          <div className="settings-column">
+            <section className="card pad settings-section settings-section--speed">
+              <div className="chart-title"><Icon name="gauge" size={15} /> 测速</div>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">节点选择方式</div>
+                  <div className="desc">自动优选会综合延迟、可用性与下载能力</div>
+                </div>
+                <Segmented
+                  value={settings.node_mode}
+                  onChange={(v) => upd({ node_mode: v })}
+                  options={[
+                    { value: "auto", label: "自动优选" },
+                    { value: "manual", label: "手动指定" },
+                  ]}
+                />
+              </SettingRow>
+              {settings.node_mode === "manual" && (
+                <SettingRow className="set-row">
+                  <div>
+                    <div className="label">默认节点</div>
+                    <div className="desc">手动模式下使用的测速节点</div>
+                  </div>
+                  <select
+                    className="select" style={{ maxWidth: 260 }}
+                    value={settings.default_node_url}
+                    onChange={(e) => upd({ default_node_url: e.target.value })}
+                  >
+                    {nodes.map((n) => (
+                      <option key={n.id} value={n.base_url}>{n.name}</option>
+                    ))}
+                  </select>
+                </SettingRow>
+              )}
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">测速持续时间</div>
+                  <div className="desc">{settings.test_duration_secs} 秒(下载与上传各一段;NDT7 单阶段最多 10 秒)</div>
+                </div>
+                <input
+                  type="range" min={5} max={30} step={1} style={{ width: 150 }}
+                  value={settings.test_duration_secs}
+                  onChange={(e) => upd({ test_duration_secs: Number(e.target.value) })}
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">精度模式</div>
+                  <div className="desc">更多并发与更密的采样,耗时略增</div>
+                </div>
+                <button className={`toggle ${settings.precision_mode ? "on" : ""}`} onClick={() => upd({ precision_mode: !settings.precision_mode })} aria-label="精度模式" />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">下载并发连接</div>
+                  <div className="desc">{settings.down_concurrency} 条(1-16,多流可对抗单流限速)</div>
+                </div>
+                <input
+                  type="range" min={1} max={16} step={1} style={{ width: 150 }}
+                  value={settings.down_concurrency}
+                  onChange={(e) => upd({ down_concurrency: Number(e.target.value) })}
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">上传并发连接</div>
+                  <div className="desc">{settings.up_concurrency} 条(1-8)</div>
+                </div>
+                <input
+                  type="range" min={1} max={8} step={1} style={{ width: 150 }}
+                  value={settings.up_concurrency}
+                  onChange={(e) => upd({ up_concurrency: Number(e.target.value) })}
+                />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">自动保存测速记录</div>
+                  <div className="desc">完成 / 取消 / 失败的测试均如实入库</div>
+                </div>
+                <button className={`toggle ${settings.autosave_history ? "on" : ""}`} onClick={() => upd({ autosave_history: !settings.autosave_history })} aria-label="自动保存" />
+              </SettingRow>
+            </section>
 
-        <section className="card pad settings-section settings-section--monitoring">
-          <div className="chart-title"><Icon name="activity" size={15} /> 后台监控与系统行为</div>
-          <div className="set-row">
-            <div>
-              <div className="label">后台网络监控</div>
-              <div className="desc">每秒采样网卡流量;关闭后零开销</div>
-            </div>
-            <button
-              className={`toggle ${settings.monitor_enabled ? "on" : ""}`}
-              onClick={async () => {
-                const next = !settings.monitor_enabled;
-                await upd({ monitor_enabled: next });
-              }}
-              aria-label="后台监控"
-            />
+            <section className="card pad settings-section settings-section--alerts">
+              <div className="chart-title"><Icon name="activity" size={15} /> 通知、告警与指标</div>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">桌面通知</div>
+                  <div className="desc">计划测速结果、网络断开/恢复时弹出系统通知</div>
+                </div>
+                <button className={`toggle ${settings.notify_events ? "on" : ""}`} onClick={() => upd({ notify_events: !settings.notify_events })} aria-label="桌面通知" />
+              </SettingRow>
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">延迟/丢包阈值告警</div>
+                  <div className="desc">每 10s 真实探测目标,均值超阈值或连续 3 次超时则通知(10 分钟冷却)</div>
+                </div>
+                <button className={`toggle ${settings.alert_enabled ? "on" : ""}`} onClick={() => upd({ alert_enabled: !settings.alert_enabled })} aria-label="阈值告警" />
+              </SettingRow>
+              {settings.alert_enabled && (
+                <SettingRow className="set-row">
+                  <div>
+                    <div className="label">告警阈值 / 目标</div>
+                    <div className="desc">平均延迟超过阈值触发;目标建议用低延迟稳定地址</div>
+                  </div>
+                  <div className="row gap8">
+                    <input type="number" min={50} max={1000} step={10} className="text-input"
+                           style={{ width: 100 }} value={settings.alert_threshold_ms}
+                           onChange={(e) => upd({ alert_threshold_ms: Number(e.target.value) })}
+                           aria-label="延迟阈值" />
+                    <input className="text-input" style={{ width: 150 }} value={settings.alert_target}
+                           onChange={(e) => upd({ alert_target: e.target.value })} aria-label="告警目标" />
+                  </div>
+                </SettingRow>
+              )}
+              <SettingRow className="set-row">
+                <div>
+                  <div className="label">Prometheus / Grafana 指标导出</div>
+                  <div className="desc">
+                    仅监听 127.0.0.1,提供 /metrics 文本格式
+                    {settings.prometheus_enabled && promStatus?.listening && (
+                      <span className="mono" style={{ color: "var(--cyan)" }}> · {promStatus.url}</span>
+                    )}
+                    {settings.prometheus_enabled && promStatus && !promStatus.listening && (
+                      <span style={{ color: "var(--red)" }}>
+                        {" "}· {promStatus.error ?? "端点未在监听"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button className={`toggle ${settings.prometheus_enabled ? "on" : ""}`}
+                        onClick={() => upd({ prometheus_enabled: !settings.prometheus_enabled })}
+                        aria-label="指标导出" />
+              </SettingRow>
+              {settings.prometheus_enabled && (
+                <SettingRow className="set-row">
+                  <div>
+                    <div className="label">导出端口</div>
+                    <div className="desc">1024-65535,修改后自动重启端点</div>
+                  </div>
+                  <input type="number" min={1024} max={65535} className="text-input"
+                         style={{ width: 120 }} value={settings.prometheus_port}
+                         onChange={(e) => upd({ prometheus_port: Number(e.target.value) })}
+                         aria-label="导出端口" />
+                </SettingRow>
+              )}
+            </section>
           </div>
-          <div className="set-row">
-            <div>
-              <div className="label">状态栏显示实时流量</div>
-              <div className="desc">在标题栏与状态栏显示当前收发速率</div>
-            </div>
-            <button className={`toggle ${settings.show_traffic ? "on" : ""}`} onClick={() => upd({ show_traffic: !settings.show_traffic })} aria-label="显示流量" />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">开机自动启动</div>
-              <div className="desc">写入当前用户注册表 Run 项,可随时关闭</div>
-            </div>
-            <button
-              className={`toggle ${settings.autostart ? "on" : ""}`}
-              onClick={async () => {
-                // updateSettings 内部吞错并返回 false:失败时不弹成功提示
-                const ok = await upd({ autostart: !settings.autostart });
-                if (ok) toast("success", !settings.autostart ? "已开启开机自启" : "已关闭开机自启");
-                else toast("error", "自启动设置保存失败,请重试");
-              }}
-              aria-label="开机自启"
-            />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">关闭窗口时最小化到托盘</div>
-              <div className="desc">关闭按钮改为隐藏窗口,托盘可彻底退出</div>
-            </div>
-            <button className={`toggle ${settings.close_to_tray ? "on" : ""}`} onClick={() => upd({ close_to_tray: !settings.close_to_tray })} aria-label="关闭到托盘" />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">计划测速</div>
-              <div className="desc">按设定间隔在后台自动执行真实测速并保存历史</div>
-            </div>
-            <button className={`toggle ${settings.auto_test_enabled ? "on" : ""}`} onClick={() => upd({ auto_test_enabled: !settings.auto_test_enabled })} aria-label="计划测速" />
-          </div>
-          {settings.auto_test_enabled && (
-            <div className="set-row">
-              <div>
-                <div className="label">测速间隔</div>
-                <div className="desc">后台自动测速的执行频率(最小 15 分钟)</div>
-              </div>
-              <select
-                className="select"
-                value={settings.auto_test_interval_minutes}
-                onChange={(e) => upd({ auto_test_interval_minutes: Number(e.target.value) })}
-              >
-                <option value={30}>30 分钟</option>
-                <option value={60}>1 小时</option>
-                <option value={120}>2 小时</option>
-                <option value={360}>6 小时</option>
-                <option value={720}>12 小时</option>
-                <option value={1440}>24 小时</option>
-              </select>
-            </div>
-          )}
-        </section>
-
-        <section className="card pad settings-section settings-section--alerts">
-          <div className="chart-title"><Icon name="activity" size={15} /> 通知、告警与指标</div>
-          <div className="set-row">
-            <div>
-              <div className="label">桌面通知</div>
-              <div className="desc">计划测速结果、网络断开/恢复时弹出系统通知</div>
-            </div>
-            <button className={`toggle ${settings.notify_events ? "on" : ""}`} onClick={() => upd({ notify_events: !settings.notify_events })} aria-label="桌面通知" />
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="label">延迟/丢包阈值告警</div>
-              <div className="desc">每 10s 真实探测目标,均值超阈值或连续 3 次超时则通知(10 分钟冷却)</div>
-            </div>
-            <button className={`toggle ${settings.alert_enabled ? "on" : ""}`} onClick={() => upd({ alert_enabled: !settings.alert_enabled })} aria-label="阈值告警" />
-          </div>
-          {settings.alert_enabled && (
-            <div className="set-row">
-              <div>
-                <div className="label">告警阈值 / 目标</div>
-                <div className="desc">平均延迟超过阈值触发;目标建议用低延迟稳定地址</div>
-              </div>
-              <div className="row gap8">
-                <input type="number" min={50} max={1000} step={10} className="text-input"
-                       style={{ width: 100 }} value={settings.alert_threshold_ms}
-                       onChange={(e) => upd({ alert_threshold_ms: Number(e.target.value) })}
-                       aria-label="延迟阈值" />
-                <input className="text-input" style={{ width: 150 }} value={settings.alert_target}
-                       onChange={(e) => upd({ alert_target: e.target.value })} aria-label="告警目标" />
-              </div>
-            </div>
-          )}
-          <div className="set-row">
-            <div>
-              <div className="label">Prometheus / Grafana 指标导出</div>
-              <div className="desc">
-                仅监听 127.0.0.1,提供 /metrics 文本格式
-                {settings.prometheus_enabled && promStatus?.listening && (
-                  <span className="mono" style={{ color: "var(--cyan)" }}> · {promStatus.url}</span>
-                )}
-                {settings.prometheus_enabled && promStatus && !promStatus.listening && (
-                  <span style={{ color: "var(--red)" }}>
-                    {" "}· {promStatus.error ?? "端点未在监听"}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button className={`toggle ${settings.prometheus_enabled ? "on" : ""}`}
-                    onClick={() => upd({ prometheus_enabled: !settings.prometheus_enabled })}
-                    aria-label="指标导出" />
-          </div>
-          {settings.prometheus_enabled && (
-            <div className="set-row">
-              <div>
-                <div className="label">导出端口</div>
-                <div className="desc">1024-65535,修改后自动重启端点</div>
-              </div>
-              <input type="number" min={1024} max={65535} className="text-input"
-                     style={{ width: 120 }} value={settings.prometheus_port}
-                     onChange={(e) => upd({ prometheus_port: Number(e.target.value) })}
-                     aria-label="导出端口" />
-            </div>
-          )}
-        </section>
-
-        {/* 网络 */}
+        </div>
         <section className="card pad settings-section settings-section--network">
           <div className="chart-title"><Icon name="wifi" size={15} /> 网络与代理</div>
-          <div className="set-row">
+          <SettingRow className="set-row">
             <div>
               <div className="label">代理模式</div>
               <div className="desc">自动读取环境变量和 Windows Internet 设置；直连模式不会使用系统代理</div>
@@ -480,9 +482,9 @@ export function SettingsPage() {
               <option value="direct">直连</option>
               <option value="manual">手动代理</option>
             </select>
-          </div>
+          </SettingRow>
           {settings.proxy_mode === "manual" && (
-            <div className="set-row">
+            <SettingRow className="set-row">
               <div>
                 <div className="label">代理地址</div>
                 <div className="desc">支持 HTTP/HTTPS 代理，例如 127.0.0.1:7890；离开输入框后保存</div>
@@ -498,9 +500,9 @@ export function SettingsPage() {
                 aria-label="手动代理地址"
                 spellCheck={false}
               />
-            </div>
+            </SettingRow>
           )}
-          <div className="set-row">
+          <SettingRow className="set-row">
             <div>
               <div className="label">代理绕过列表</div>
               <div className="desc">可填写主机名或 IP，使用逗号、分号或空格分隔；PAC/WPAD 暂不支持</div>
@@ -516,7 +518,7 @@ export function SettingsPage() {
               aria-label="代理绕过列表"
               spellCheck={false}
             />
-          </div>
+          </SettingRow>
           {proxyStatus?.warning && (
             <div className="test-error settings-proxy-warning" role="alert">
               {proxyStatus.warning} 当前自动代理规则无法测速或诊断；应用不会静默改为直连。
@@ -529,24 +531,23 @@ export function SettingsPage() {
           )}
         </section>
 
-        {/* 隐私 */}
         <section className="card pad settings-section settings-section--privacy">
           <div className="chart-title"><Icon name="shield" size={15} /> 隐私与数据</div>
-          <div className="set-row">
+          <SettingRow className="set-row">
             <div>
               <div className="label">显示公网 IP 与 ISP</div>
               <div className="desc">关闭时不向任何服务查询 IP;开启后仅查询测速同源服务</div>
             </div>
             <button className={`toggle ${settings.show_public_ip ? "on" : ""}`} onClick={() => upd({ show_public_ip: !settings.show_public_ip })} aria-label="公网 IP" />
-          </div>
-          <div className="set-row">
+          </SettingRow>
+          <SettingRow className="set-row">
             <div>
               <div className="label">保存诊断数据</div>
               <div className="desc">开启后把诊断结果保存到本机历史数据库，按历史保留策略清理</div>
             </div>
             <button className={`toggle ${settings.save_diag_history ? "on" : ""}`} onClick={() => upd({ save_diag_history: !settings.save_diag_history })} aria-label="保存诊断" />
-          </div>
-          <div className="set-row">
+          </SettingRow>
+          <SettingRow className="set-row">
             <div>
               <div className="label">数据与设置备份</div>
               <div className="desc">导出测速历史，或把当前设置保存为可迁移的 JSON 备份</div>
@@ -567,8 +568,8 @@ export function SettingsPage() {
                 {backupBusy === "import" ? "导入中…" : "恢复设置"}
               </button>
             </div>
-          </div>
-          <div className="set-row">
+          </SettingRow>
+          <SettingRow className="set-row">
             <div>
               <div className="label">历史保留策略</div>
               <div className="desc">自动删除超过保留期的测速记录(启动时清理)</div>
@@ -581,17 +582,16 @@ export function SettingsPage() {
               <option value={180}>180 天</option>
               <option value={365}>1 年</option>
             </select>
-          </div>
-          <div className="set-row">
+          </SettingRow>
+          <SettingRow className="set-row">
             <div>
               <div className="label">清空历史记录</div>
               <div className="desc">永久删除本机全部测速记录</div>
             </div>
             <button className="btn sm danger" onClick={() => setConfirmClear(true)}><Icon name="trash" size={13} /> 清空</button>
-          </div>
+          </SettingRow>
         </section>
 
-        {/* 关于 */}
         <section className="card pad about-card settings-section settings-section--about">
           <div className="chart-title"><Icon name="info" size={15} /> 关于</div>
           <div className="row gap12 mt8">
@@ -647,7 +647,7 @@ export function SettingsPage() {
               {update.notes || "该版本没有提供更新说明。"}
             </div>
           )}
-          <div className="set-row mt12">
+          <SettingRow className="set-row mt12">
             <div>
               <div className="label">自动检查稳定版更新</div>
               <div className="desc">启动后按间隔检查 GitHub Releases；网络失败不会影响应用启动</div>
@@ -657,8 +657,8 @@ export function SettingsPage() {
               onClick={() => upd({ auto_update_enabled: !settings.auto_update_enabled })}
               aria-label="自动检查更新"
             />
-          </div>
-          <div className="set-row">
+          </SettingRow>
+          <SettingRow className="set-row">
             <div>
               <div className="label">自动检查间隔</div>
               <div className="desc">仅使用稳定版 Release；Beta/Dev 通道暂未发布</div>
@@ -675,9 +675,8 @@ export function SettingsPage() {
               <option value={72}>每 3 天</option>
               <option value={168}>每周</option>
             </select>
-          </div>
-        </section>
-      </div>
+          </SettingRow>
+        </section></div>
 
       {confirmClear && (
         <ConfirmModal

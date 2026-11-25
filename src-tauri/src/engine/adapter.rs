@@ -18,6 +18,13 @@ pub struct ThroughputCounters {
     pub sent_bytes: AtomicU64,
     /// 服务端返回成功状态后确认接受的上传字节数。
     pub accepted_bytes: AtomicU64,
+    /// 可选的协议实测时长(微秒);NDT7 从 WebSocket 握手完成后计时。
+    measurement_duration_micros: AtomicU64,
+    /// 可选的协议预热窗口内确认字节数。
+    measurement_warmup_bytes: AtomicU64,
+    measurement_warmup_known: std::sync::atomic::AtomicBool,
+    /// 协议错误(不计入 HTTP 失败),仅保留已脱敏的分类文本。
+    phase_error: std::sync::Mutex<Option<String>>,
     /// 吞吐阶段 HTTP 请求失败次数(与 ICMP 丢包严格区分)
     pub failures: AtomicU32,
 }
@@ -44,6 +51,37 @@ impl ThroughputCounters {
     }
     pub fn accepted(&self) -> u64 {
         self.accepted_bytes.load(Ordering::Relaxed)
+    }
+    pub fn set_measurement_timing(&self, duration: Duration, warmup_bytes: Option<u64>) {
+        self.measurement_duration_micros.store(
+            duration.as_micros().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+        if let Some(warmup_bytes) = warmup_bytes {
+            self.measurement_warmup_bytes
+                .store(warmup_bytes, Ordering::Relaxed);
+            self.measurement_warmup_known.store(true, Ordering::Relaxed);
+        } else {
+            self.measurement_warmup_known
+                .store(false, Ordering::Relaxed);
+        }
+    }
+    pub fn measurement_timing(&self) -> Option<(f64, Option<u64>)> {
+        let micros = self.measurement_duration_micros.load(Ordering::Relaxed);
+        (micros > 0).then(|| {
+            (
+                micros as f64 / 1000.0,
+                self.measurement_warmup_known
+                    .load(Ordering::Relaxed)
+                    .then(|| self.measurement_warmup_bytes.load(Ordering::Relaxed)),
+            )
+        })
+    }
+    pub fn set_phase_error(&self, message: impl Into<String>) {
+        *crate::safe_lock::lock(&self.phase_error) = Some(message.into());
+    }
+    pub fn phase_error(&self) -> Option<String> {
+        crate::safe_lock::lock(&self.phase_error).clone()
     }
     pub fn add_failure(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
@@ -141,6 +179,13 @@ pub fn cache_buster() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measurement_timing_keeps_unknown_warmup_unknown() {
+        let counters = ThroughputCounters::default();
+        counters.set_measurement_timing(Duration::from_millis(1500), None);
+        assert_eq!(counters.measurement_timing(), Some((1500.0, None)));
+    }
 
     #[test]
     fn test_counters() {

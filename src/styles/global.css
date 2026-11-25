@@ -154,7 +154,7 @@ input, textarea { user-select: text; }
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   padding: 22px clamp(20px, 2.5vw, 32px) 30px;
   position: relative;
 }
@@ -597,6 +597,20 @@ html.theme-light .toast { background: rgba(255,255,255,.95); }
 html.theme-light .statusbar { background: rgba(255,255,255,.55); }
 .statusbar .seg { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 .statusbar .seg b { color: var(--text); font-weight: 600; }
+.statusbar .seg:nth-child(2),
+.statusbar .seg:nth-child(3),
+.statusbar .seg:last-child { min-width: 0; }
+.statusbar .seg:nth-child(2) { flex: 0 1 280px; overflow: hidden; }
+.statusbar .seg:nth-child(3) { flex: 0 1 auto; overflow: hidden; }
+.statusbar .seg:last-child { flex: 0 1 300px; overflow: hidden; }
+.statusbar-node,
+.statusbar .seg:nth-child(3) b,
+.statusbar .seg:last-child b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.statusbar-node { display: block; }
 .statusbar .grow { flex: 1; }
 .statusbar .mono { font-family: var(--mono); }
 

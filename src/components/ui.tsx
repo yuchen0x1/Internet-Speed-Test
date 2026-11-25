@@ -88,6 +88,10 @@ export function Modal(props: {
   );
 }
 
+export function SettingRow(props: { children: React.ReactNode; className?: string }) {
+  return <div className={props.className ?? "set-row"}>{props.children}</div>;
+}
+
 export function Toasts() {
   const { toasts, dismissToast } = useApp();
   const icons = { success: "check", error: "alert", warn: "alert", info: "info" } as const;
