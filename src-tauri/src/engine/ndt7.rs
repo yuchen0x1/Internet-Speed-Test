@@ -691,8 +691,20 @@ fn validated_server_duration(
 mod tests {
     use super::*;
     use tokio_tungstenite::tungstenite::handshake::server::{
-        Request as ServerRequest, Response as ServerResponse,
+        ErrorResponse, Request as ServerRequest, Response as ServerResponse,
     };
+
+    #[allow(clippy::result_large_err)]
+    fn ndt7_server_handshake(
+        _request: &ServerRequest,
+        mut response: ServerResponse,
+    ) -> Result<ServerResponse, ErrorResponse> {
+        response.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(NDT7_SUBPROTOCOL),
+        );
+        Ok(response)
+    }
 
     async fn accept_ndt7_socket(
         stream: tokio::net::TcpStream,
@@ -700,17 +712,7 @@ mod tests {
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         tokio_tungstenite::tungstenite::Error,
     > {
-        tokio_tungstenite::accept_hdr_async(
-            stream,
-            |_request: &ServerRequest, mut response: ServerResponse| {
-                response.headers_mut().insert(
-                    SEC_WEBSOCKET_PROTOCOL,
-                    HeaderValue::from_static(NDT7_SUBPROTOCOL),
-                );
-                Ok(response)
-            },
-        )
-        .await
+        tokio_tungstenite::accept_hdr_async(stream, ndt7_server_handshake).await
     }
 
     #[tokio::test]
