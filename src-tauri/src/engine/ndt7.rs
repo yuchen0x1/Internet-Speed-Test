@@ -412,7 +412,7 @@ impl ProviderAdapter for Ndt7Adapter {
 
         let measurement_started = tokio::time::Instant::now();
         let deadline = measurement_started + test_duration;
-        let mut warmup_bytes = 0;
+        let mut warmup_bytes = 0_u64;
         let mut warmup_observed = false;
         loop {
             tokio::select! {
@@ -760,7 +760,7 @@ mod tests {
                 let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
                     continue;
                 };
-                while let Ok(Ok(Some(Ok(message)))) =
+                while let Ok(Some(Ok(message))) =
                     tokio::time::timeout(Duration::from_millis(300), ws.next()).await
                 {
                     if let Message::Binary(bytes) = message {
