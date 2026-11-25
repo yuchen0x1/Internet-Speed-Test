@@ -12,9 +12,9 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 <!-- github-release:start -->
 
-**[v1.15.2](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.2)** · 2026-11-25
+**[v1.15.3](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.3)** · 2026-11-25
 
-本次更新集中修复代理网络下的 HTTP 测速连接、节点故障恢复、NDT7 测量统计及 Windows 桌面排版。统一网络代理策略，改善失败后的重试与节点切换，重排设置页面与多页面内容网格，并修复依赖安全问题。完整代理故障矩阵、真实跨网络环境及桌面 DPI 矩阵仍未完成，具体边界见下文。
+默认浅色主题：首次运行或配置缺少主题字段时使用浅色模式，仍可在设置中选择深色或跟随系统。
 
 [全部发行记录](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
