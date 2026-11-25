@@ -293,6 +293,7 @@ mod desktop {
                 commands::settings_export,
                 commands::settings_import,
                 commands::get_network_status,
+                commands::proxy_runtime_status,
                 commands::prometheus_status,
                 commands::servers_list,
                 commands::servers_refresh,

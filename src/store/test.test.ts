@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appendSpeedSample, MAX_SAMPLES, useTest } from "./test";
+import { appendSpeedSample, MAX_SAMPLES, useServers, useTest } from "./test";
 import { api, onEngineEvent, onServersProbed } from "../api";
 import { useApp } from "./app";
 import type { EngineEvent, TestResult } from "../types";
@@ -35,6 +35,40 @@ describe("appendSpeedSample(x 轴采样计算)", () => {
     expect(s[s.length - 1][1]).toBe(MAX_SAMPLES + 9);
     expect(s[0][1]).toBe(10);
     for (let i = 1; i < s.length; i++) expect(s[i][0]).toBeGreaterThan(s[i - 1][0]);
+  });
+});
+
+describe("server probe reasons", () => {
+  afterEach(() => useServers.setState({ nodes: [], probeErrors: {} }));
+
+  it("keeps an explicit protocol-unavailable reason for the node row", () => {
+    useServers.setState({
+      nodes: [{
+        id: "ndt",
+        name: "M-Lab NDT7",
+        provider: "ndt7",
+        base_url: "https://mlab.example",
+        dl_url: "wss://mlab.example/ndt/v7/download",
+        ul_url: "wss://mlab.example/ndt/v7/upload",
+        ping_url: "",
+        getip_url: "",
+        location: null,
+        favorite: false,
+        alive: null,
+        latency_ms: null,
+        allow_http: false,
+      }],
+    });
+
+    useServers.getState().applyProbe([{
+      id: "ndt",
+      alive: false,
+      latencyMs: null,
+      reason: "当前代理模式不支持 NDT7 WebSocket 隧道",
+    }]);
+
+    expect(useServers.getState().probeErrors.ndt).toBe("当前代理模式不支持 NDT7 WebSocket 隧道");
+    expect(useServers.getState().nodes[0].alive).toBe(false);
   });
 });
 

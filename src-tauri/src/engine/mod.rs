@@ -34,7 +34,7 @@ use crate::storage::Storage;
 use adapter::ThroughputCounters;
 use model::{
     bytes_per_sec_to_mbps, EngineConfig, EngineEvent, ServerNodeInfo, TestPhase, TestResult,
-    PROVIDER_CUSTOM,
+    PROVIDER_CUSTOM, PROVIDER_NDT7,
 };
 use selector::ServerRegistry;
 
@@ -274,7 +274,14 @@ impl SpeedTestEngine {
             &settings.proxy_url,
             &settings.proxy_bypass,
         ) {
-            Ok(policy) => Some(Arc::new(ServerRegistry::with_policy(policy))),
+            Ok(policy) => {
+                if let Some(reason) = policy.unavailable_reason() {
+                    result.error = Some(reason.to_string());
+                    None
+                } else {
+                    Some(Arc::new(ServerRegistry::with_policy(policy)))
+                }
+            }
             Err(error) => {
                 result.error = Some(format!("代理配置无效: {error}"));
                 None
@@ -393,7 +400,10 @@ impl SpeedTestEngine {
                     .iter()
                     .map(|p| {
                         serde_json::json!({
-                            "id": p.node.id, "alive": p.alive, "latencyMs": p.latency_ms
+                            "id": p.node.id,
+                            "alive": p.alive,
+                            "latencyMs": p.latency_ms,
+                            "reason": p.reason,
                         })
                     })
                     .collect::<Vec<_>>(),
@@ -430,7 +440,10 @@ impl SpeedTestEngine {
                     n
                 }
                 None => {
-                    return Err("未找到可用的测速节点:所有节点探测失败,请检查网络或稍后重试".into())
+                    if let Some(reason) = ndt7_proxy_unavailable_reason(&probes) {
+                        return Err(format!("未找到可用的测速节点；NDT7 协议不可用：{reason}"));
+                    }
+                    return Err("未找到可用的测速节点:所有节点探测失败,请检查网络或稍后重试".into());
                 }
             }
         } else {
@@ -956,6 +969,14 @@ fn fallback_candidates<'a>(
         .collect()
 }
 
+fn ndt7_proxy_unavailable_reason(probes: &[selector::ProbeOutcome]) -> Option<&str> {
+    probes
+        .iter()
+        .find(|probe| probe.node.provider == PROVIDER_NDT7)
+        .and_then(|probe| probe.reason.as_deref())
+        .filter(|reason| reason.contains("NDT7 WebSocket"))
+}
+
 /// 手动指定节点不在列表中时的兜底:仅接受合法 HTTPS URL,按 LibreSpeed 默认端点构造。
 /// 不猜参数、不降级为 HTTP;能否测速由后续真实请求验证,失败会如实上报。
 pub fn manual_node_fallback(url: &str) -> Option<ServerNodeInfo> {
@@ -1140,5 +1161,22 @@ mod tests {
         assert!(!engine.is_running());
         assert_eq!(engine.current_phase(), TestPhase::Idle);
         assert!(crate::safe_lock::lock(&engine.cancel_token).is_none());
+    }
+
+    #[test]
+    fn test_ndt7_proxy_probe_failure_is_reportable() {
+        let mut node = ServerNodeInfo::default();
+        node.provider = PROVIDER_NDT7.into();
+        let probes = [selector::ProbeOutcome {
+            node,
+            alive: false,
+            latency_ms: None,
+            reason: Some("当前代理模式不支持 NDT7 WebSocket 隧道".into()),
+        }];
+
+        assert_eq!(
+            ndt7_proxy_unavailable_reason(&probes),
+            Some("当前代理模式不支持 NDT7 WebSocket 隧道")
+        );
     }
 }

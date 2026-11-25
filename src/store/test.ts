@@ -271,6 +271,7 @@ export const useTest = create<TestStore>((set, get) => ({
 
 interface ServersStore {
   nodes: ServerNodeInfo[];
+  probeErrors: Record<string, string>;
   loading: boolean;
   probing: boolean;
   loaded: boolean;
@@ -281,6 +282,7 @@ interface ServersStore {
 
 export const useServers = create<ServersStore>((set, get) => ({
   nodes: [],
+  probeErrors: {},
   loading: false,
   probing: false,
   loaded: false,
@@ -290,7 +292,7 @@ export const useServers = create<ServersStore>((set, get) => ({
     set({ loading: true });
     try {
       const nodes = await api.serversList();
-      set({ nodes, loaded: true });
+      set({ nodes, probeErrors: {}, loaded: true });
     } finally {
       set({ loading: false });
     }
@@ -298,7 +300,7 @@ export const useServers = create<ServersStore>((set, get) => ({
 
   refresh: async () => {
     if (get().probing) return;
-    set({ probing: true });
+    set({ probing: true, probeErrors: {} });
     try {
       const nodes = await api.serversRefresh();
       set({ nodes, loaded: true });
@@ -316,6 +318,9 @@ export const useServers = create<ServersStore>((set, get) => ({
         const p = map.get(n.id);
         return p ? { ...n, alive: p.alive, latency_ms: p.latencyMs } : n;
       }),
+      probeErrors: Object.fromEntries(
+        probes.flatMap((probe) => (probe.reason ? [[probe.id, probe.reason]] : [])),
+      ),
     }));
   },
 }));

@@ -27,6 +27,7 @@ import type {
   PingReport,
   PublicInfo,
   PrometheusStatus,
+  ProxyRuntimeStatus,
   RouteQualityReport,
   ServerNodeInfo,
   TcpResult,
@@ -71,6 +72,7 @@ export const api = {
   settingsExport: () => invoke<string>("settings_export"),
   settingsImport: () => invoke<AppSettings>("settings_import"),
   netStatus: () => invoke<NetStatus>("get_network_status"),
+  proxyRuntimeStatus: () => invoke<ProxyRuntimeStatus>("proxy_runtime_status"),
 
   serversList: () => invoke<ServerNodeInfo[]>("servers_list"),
   serversRefresh: () => invoke<ServerNodeInfo[]>("servers_refresh"),
@@ -193,9 +195,9 @@ export function onEngineEvent(cb: (ev: import("./types").EngineEvent) => void): 
 
 /** 节点探测进度事件 */
 export function onServersProbed(
-  cb: (probes: { id: string; alive: boolean; latencyMs: number | null }[]) => void,
+  cb: (probes: { id: string; alive: boolean; latencyMs: number | null; reason: string | null }[]) => void,
 ): Promise<UnlistenFn> {
-  return listen<{ id: string; alive: boolean; latencyMs: number | null }[]>(
+  return listen<{ id: string; alive: boolean; latencyMs: number | null; reason: string | null }[]>(
     "servers://probed",
     (e) => cb(e.payload),
   );

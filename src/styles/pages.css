@@ -202,6 +202,16 @@ html.theme-light input[type="date"] { color-scheme: light; }
 .settings-section--monitoring,
 .settings-section--alerts { grid-column: span 6; }
 .settings-section--network { grid-column: 1 / -1; }
+.settings-proxy-warning { max-width: none; margin: 0; }
+.settings-proxy-notice {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(251, 191, 36, 0.07);
+  color: var(--amber);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+}
 .settings-section--privacy,
 .settings-section--about { grid-column: 1 / -1; }
 .about-card { grid-column: 1 / -1; }
