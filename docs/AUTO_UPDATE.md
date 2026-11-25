@@ -95,6 +95,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 ## 已知限制
 
 - 更新检查只针对 GitHub Releases 的稳定版；没有 Beta/Dev 通道。
+- 更新器尚未接入应用设置中保存的手动代理策略。启动自动检查需要启用相应设置、满足检查间隔，且更新器自身能够访问 GitHub；不能保证所有代理环境都能自动发现更新。无法连接时可在 Release 页面手动下载覆盖升级。
 - 当前 Windows 安装模式为 passive，下载完成后交给 NSIS 安装器，应用不提供独立的取消按钮。
 - 更新器签名校验由 Tauri updater 负责；`SHA256SUMS.txt` 是额外的发布审计材料，不替代签名校验。
 - 发布工作流不会自动创建代码签名证书，也不会在缺少 updater 私钥时伪造签名资产。
