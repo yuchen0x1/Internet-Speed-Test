@@ -1165,8 +1165,10 @@ mod tests {
 
     #[test]
     fn test_ndt7_proxy_probe_failure_is_reportable() {
-        let mut node = ServerNodeInfo::default();
-        node.provider = PROVIDER_NDT7.into();
+        let node = ServerNodeInfo {
+            provider: PROVIDER_NDT7.into(),
+            ..Default::default()
+        };
         let probes = [selector::ProbeOutcome {
             node,
             alive: false,
