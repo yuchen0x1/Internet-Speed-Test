@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, onPingMonTick } from "../api";
 import { useApp } from "../store/app";
 import { fmtBytes, fmtBytesPerSec, isCancelError } from "../lib/format";
+import { summarizeMonitorBuckets } from "../lib/monitor";
 import { useMonitor } from "../store/app";
 import { LineChart, type Series } from "../components/LineChart";
 import { ActivityBars } from "../components/ActivityBars";
@@ -118,18 +119,7 @@ export function MonitorPage() {
   }, [buffer, win]);
 
   const topIfaces = latest?.ifaces.slice(0, 6) ?? [];
-  const aggregateSummary = useMemo(() => {
-    if (!buckets.length) return null;
-    const rxAvg = buckets.reduce((sum, b) => sum + b.rx_avg_bps, 0) / buckets.length;
-    const txAvg = buckets.reduce((sum, b) => sum + b.tx_avg_bps, 0) / buckets.length;
-    return {
-      rxAvg,
-      txAvg,
-      rxP95: Math.max(...buckets.map((b) => b.rx_p95_bps)),
-      txP95: Math.max(...buckets.map((b) => b.tx_p95_bps)),
-      samples: buckets.reduce((sum, b) => sum + b.sample_count, 0),
-    };
-  }, [buckets]);
+  const aggregateSummary = useMemo(() => summarizeMonitorBuckets(buckets), [buckets]);
 
   const toggleMonitor = async (on: boolean) => {
     const saved = await updateSettings({ monitor_enabled: on });

@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -43,6 +43,11 @@ jobs:
       - name: 安装前端依赖
         run: npm ci --registry=https://registry.npmjs.org
 
+      - name: Install Rust security audit
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
+        with:
+          tool: cargo-audit
+
       - name: Release quality gates
         run: |
           npm run version:check
@@ -52,6 +57,10 @@ jobs:
           npm run ipc:check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run security:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo audit --file src-tauri/Cargo.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test scripts/tests/release-assets.node.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -165,21 +174,7 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            mapfile -t existing_assets < <(gh release view "$TAG" --json assets --jq '.assets[].name')
-            missing_assets=()
-            for file in release-artifacts/*; do
-              name="${file##*/}"
-              if printf '%s\n' "${existing_assets[@]}" | grep -Fxq -- "$name"; then
-                echo "保留已存在资产: $name"
-              else
-                missing_assets+=("$file")
-              fi
-            done
-            if ((${#missing_assets[@]})); then
-              gh release upload "$TAG" "${missing_assets[@]}"
-            else
-              echo "Release $TAG 已包含全部构建资产。"
-            fi
+            node scripts/upload-missing-release-assets.mjs "$TAG"
           else
             # 注释标签(tag -m)即发布说明;空标签消息回退为自动生成。
             git tag -l --format='%(contents)' "$TAG" > release-notes.txt

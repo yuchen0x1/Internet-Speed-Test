@@ -24,6 +24,7 @@ interface AppStore {
   settingsDirty: boolean;
 
   boot: () => Promise<void>;
+  bindNetwork: () => Promise<void>;
   setPage: (p: PageId) => void;
   updateSettings: (patch: Partial<AppSettings>, persist?: boolean) => Promise<boolean>;
   toast: (kind: "success" | "error" | "warn" | "info", text: string) => void;
@@ -33,6 +34,7 @@ interface AppStore {
 
 let toastId = 1;
 let listenersBound = false;
+let networkBinding: Promise<void> | null = null;
 let settingsSaveQueue: Promise<void> = Promise.resolve();
 
 export const useApp = create<AppStore>((set, get) => ({
@@ -53,13 +55,22 @@ export const useApp = create<AppStore>((set, get) => ({
       ]);
       set({ appInfo: info, settings, net, booted: true });
       get().applyTheme();
-      if (!listenersBound) {
-        listenersBound = true;
-        onNetStatus((s) => set({ net: s }));
-      }
+      await get().bindNetwork();
     } catch (e) {
       console.error("启动失败", e);
       set({ booted: true });
+    }
+  },
+
+  bindNetwork: async () => {
+    if (listenersBound) return;
+    networkBinding ??= onNetStatus((s) => set({ net: s }))
+      .then(() => { listenersBound = true; })
+      .finally(() => { networkBinding = null; });
+    try {
+      await networkBinding;
+    } catch (e) {
+      get().toast("warn", `网络状态监听失败，重新聚焦窗口可重试：${String(e)}`);
     }
   },
 

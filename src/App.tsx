@@ -10,6 +10,7 @@ import { Toasts } from "./components/ui";
 import { Icon } from "./components/Icon";
 import { ErrorBoundary, installGlobalErrorHandlers } from "./components/ErrorBoundary";
 import { useI18n } from "./i18n";
+import { isUpdateCheckDue } from "./lib/updater";
 import { SpeedTestPage } from "./pages/SpeedTestPage";
 // 首屏是测速页,保持同步加载;其余页面按需加载以降低首屏包体积
 const QualityPage = lazy(() => import("./pages/QualityPage").then((m) => ({ default: m.QualityPage })));
@@ -100,6 +101,7 @@ export default function App() {
     if (!booted) return;
     const onFocus = async () => {
       try {
+        await useApp.getState().bindNetwork();
         await bindTest();
         await syncRunning();
       } catch (e) {
@@ -123,7 +125,7 @@ export default function App() {
     } catch {
       // WebView storage may be unavailable in a restricted profile; update checks remain optional.
     }
-    if (Number.isFinite(last) && Date.now() - last < intervalMs) return;
+    if (!isUpdateCheckDue(last, intervalMs)) return;
     try {
       window.localStorage.setItem(key, String(Date.now()));
     } catch {

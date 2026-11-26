@@ -161,9 +161,11 @@ impl ProviderAdapter for LibreSpeedAdapter {
                         counters.clone(),
                         token.clone(),
                     );
+                    let produced = body.produced_bytes();
                     let req = client
                         .post(&ul)
                         .header("Content-Type", "application/octet-stream")
+                        .header(reqwest::header::CONTENT_LENGTH, chunk.to_string())
                         .timeout(Duration::from_secs(30))
                         .body(reqwest::Body::wrap_stream(body));
                     match token.run_until_cancelled(req.send()).await {
@@ -177,7 +179,11 @@ impl ProviderAdapter for LibreSpeedAdapter {
                             }
                         }
                         Some(Ok(r)) if r.status().is_success() => {
-                            counters.commit_accepted(chunk as u64);
+                            if !super::upload_stream::commit_completed_upload(
+                                &counters, &produced, chunk,
+                            ) {
+                                break;
+                            }
                             let drain_token = token.clone();
                             drains.spawn(async move {
                                 tokio::select! {

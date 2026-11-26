@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: repair-release-${{ inputs.tag }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,14 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load current release validation tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -59,8 +67,19 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --registry=https://registry.npmjs.org
 
+      - name: Install Rust security audit
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
+        with:
+          tool: cargo-audit
+
       - name: Run release tests
         run: |
+          npm run security:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo audit --file src-tauri/Cargo.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test .release-tools/scripts/tests/release-assets.node.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --manifest-path src-tauri/Cargo.toml
@@ -114,20 +133,6 @@ jobs:
           test -s release-artifacts/latest.json
           test -s release-artifacts/SHA256SUMS.txt
 
-          mapfile -t existing_assets < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
-          missing_assets=()
-          for file in release-artifacts/*; do
-            name="${file##*/}"
-            if printf '%s\n' "${existing_assets[@]}" | grep -Fxq -- "$name"; then
-              echo "Keeping existing asset: $name"
-            else
-              missing_assets+=("$file")
-            fi
-          done
-          if ((${#missing_assets[@]})); then
-            gh release upload "$RELEASE_TAG" "${missing_assets[@]}"
-          else
-            echo "Release already contains all generated assets."
-          fi
+          node .release-tools/scripts/upload-missing-release-assets.mjs "$RELEASE_TAG"
 
           gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'

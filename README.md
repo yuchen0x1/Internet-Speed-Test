@@ -229,7 +229,7 @@ ICMP 可能被目标主机或中间设备限速、丢弃。应用把 HTTP 失败
 
 ## 安全修复
 
-当前前端图标构建依赖 `sharp@0.35.5`。2026-11-13 本轮官方源 npm audit 退出 0、当前漏洞计数 0；Rust 审计退出 0，但保留 5 项维护性/unsound 告警。测试与审计边界见 [本轮验收报告](docs/evolution-batch-metrics-2026-11-13.md)。更新包使用 minisign 校验及签名版本绑定；Windows 安装器目前没有 Authenticode 证书签名，两者用途不同。
+v1.15.7 审查的官方源 npm audit 退出 0，没有已知漏洞；Rust 审计退出 0，仍有 6 项维护性/unsound 告警，逐项影响范围与残余风险见 [安全政策](SECURITY.md)。正式发布与补传流程也执行 Rust 审计，补传前核对安装包、签名、清单与校验和，阻止不同构建混用。更新包使用 minisign 校验及签名版本绑定；Windows 安装器目前没有 Authenticode 证书签名，两者用途不同。
 
 ## 贡献
 

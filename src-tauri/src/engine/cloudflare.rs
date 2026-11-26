@@ -200,9 +200,11 @@ impl ProviderAdapter for CloudflareAdapter {
                         counters.clone(),
                         token.clone(),
                     );
+                    let produced = body.produced_bytes();
                     let req = client
                         .post(&ul)
                         .header("Content-Type", "text/plain;charset=UTF-8")
+                        .header(reqwest::header::CONTENT_LENGTH, chunk.to_string())
                         .timeout(Duration::from_secs(40))
                         .body(reqwest::Body::wrap_stream(body));
                     match token.run_until_cancelled(req.send()).await {
@@ -215,7 +217,11 @@ impl ProviderAdapter for CloudflareAdapter {
                             }
                         }
                         Some(Ok(r)) if r.status().is_success() => {
-                            counters.commit_accepted(chunk as u64);
+                            if !super::upload_stream::commit_completed_upload(
+                                &counters, &produced, chunk,
+                            ) {
+                                break;
+                            }
                             // 流水线化:后台排空响应,立即开始下一块(消除块间空隙)
                             let drain_token = token.clone();
                             drains.spawn(async move {

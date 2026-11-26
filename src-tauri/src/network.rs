@@ -191,7 +191,10 @@ fn parse_bypass(value: &str) -> Vec<String> {
 fn parse_proxy_entries(raw: &str) -> Result<Vec<ProxyEntry>, String> {
     let mut entries = Vec::new();
     for part in raw.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-        let (scheme, value) = if let Some((kind, value)) = part.split_once('=') {
+        let assignment = part
+            .split_once('=')
+            .filter(|(kind, _)| !kind.contains("://"));
+        let (scheme, value) = if let Some((kind, value)) = assignment {
             let kind = kind.trim().to_ascii_lowercase();
             if !matches!(kind.as_str(), "http" | "https" | "socks4" | "socks5") {
                 return Err("代理协议仅支持 http、https、socks4 或 socks5".into());
@@ -203,7 +206,12 @@ fn parse_proxy_entries(raw: &str) -> Result<Vec<ProxyEntry>, String> {
         let normalized = if value.contains("://") {
             value.to_string()
         } else {
-            format!("http://{value}")
+            let protocol = match scheme.as_deref() {
+                Some("socks4") => "socks4",
+                Some("socks5") => "socks5",
+                _ => "http",
+            };
+            format!("{protocol}://{value}")
         };
         let url = Url::parse(&normalized)
             .map_err(|_| "代理地址格式无效，请检查主机、端口和协议".to_string())?;
@@ -379,6 +387,22 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].scheme.as_deref(), Some("http"));
         assert_eq!(entries[1].scheme.as_deref(), Some("https"));
+    }
+
+    #[test]
+    fn proxy_credentials_can_contain_equals() {
+        let entries = parse_proxy_entries("http://user:p=ss@127.0.0.1:8080").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url.password(), Some("p%3Dss"));
+        assert_eq!(entries[0].scheme, None);
+    }
+
+    #[test]
+    fn socks_assignment_preserves_the_proxy_protocol() {
+        let entries = parse_proxy_entries("socks5=127.0.0.1:1080").unwrap();
+        assert_eq!(entries[0].url.scheme(), "socks5");
+        let entries = parse_proxy_entries("socks4=127.0.0.1:1081").unwrap();
+        assert_eq!(entries[0].url.scheme(), "socks4");
     }
 
     #[test]

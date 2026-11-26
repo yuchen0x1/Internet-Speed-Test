@@ -45,6 +45,13 @@ fn save_state(p: &std::path::Path, s: &AutoTestState) {
     }
 }
 
+fn auto_test_due(last_started_ms: u64, now_ms: u64, interval_min: u32) -> bool {
+    // Recover after a clock rollback or a future/corrupt persisted timestamp.
+    last_started_ms == 0
+        || now_ms < last_started_ms
+        || now_ms - last_started_ms >= u64::from(interval_min.clamp(15, 1440)) * 60_000
+}
+
 fn notify(app: &tauri::AppHandle, settings: &AppSettings, title: &str, body: &str) {
     if !settings.notify_events {
         return;
@@ -74,9 +81,7 @@ pub fn spawn(
             if !enabled || engine.is_running() {
                 continue;
             }
-            let due = last_state.last_started_ms == 0
-                || now_ms() >= last_state.last_started_ms + (interval_min as u64) * 60_000;
-            if !due {
+            if !auto_test_due(last_state.last_started_ms, now_ms(), interval_min) {
                 continue;
             }
             // 记录启动时间(先落盘,避免失败后高频重试)
@@ -90,11 +95,8 @@ pub fn spawn(
             let Ok(result_rx) = result_rx else {
                 continue;
             };
-            // 等待本次测速结束(轮询运行标志),随后用本次真实结果发通知
+            // 等待本次结果，不受其后启动的其他测速任务影响。
             // (不读历史库:autosave 关闭时历史最新一条是上一次的旧结果)
-            while engine.is_running() {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
             let Ok(result) = result_rx.await else {
                 continue;
             };
@@ -233,4 +235,26 @@ pub fn spawn_alerts(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_test_due;
+
+    #[test]
+    fn automatic_test_schedule_recovers_future_timestamps_without_overflow() {
+        assert!(auto_test_due(0, 1, 60));
+        assert!(!auto_test_due(1_000, 3_600_999, 60));
+        assert!(auto_test_due(1_000, 3_601_000, 60));
+        assert!(auto_test_due(3_601_000, 1_000, 60));
+        assert!(auto_test_due(u64::MAX, 1_000, 60));
+    }
+
+    #[test]
+    fn automatic_test_schedule_bounds_legacy_intervals() {
+        assert!(!auto_test_due(1_000, 1_001, 0));
+        assert!(auto_test_due(1_000, 901_000, 0));
+        assert!(!auto_test_due(1_000, 86_400_999, u32::MAX));
+        assert!(auto_test_due(1_000, 86_401_000, u32::MAX));
+    }
 }
