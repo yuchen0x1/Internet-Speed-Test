@@ -12,9 +12,9 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 <!-- github-release:start -->
 
-**[v1.15.6](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.6)** · 2026-11-26
+**[v1.15.7](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.7)** · 2026-11-26
 
-本次更新修复发布版中从托盘启动测速可能导致应用退出的问题，并修正测速曲线时间轴、后台监控速率与速度单位显示等缺陷，同时加强设置输入校验、异步请求顺序和删除操作确认。本版不修改设置字段或历史数据库结构，可直接覆盖升级，配置与历史记录保留。
+真实时间采样：系统繁忙导致采样延迟时，按实际经过时间计算瞬时速率、时间轴、阶段均值及停滞时限，避免固定 200 ms 分母放大速度。
 
 [全部发行记录](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
