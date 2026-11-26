@@ -128,7 +128,11 @@ test('rejects wrong or duplicate checksums and altered updater download binding'
   sample.write('SHA256SUMS.txt', sums);
   sample.manifest.platforms['windows-x86_64'].url = 'https://example.com/untrusted.exe';
   sample.write('latest.json', JSON.stringify(sample.manifest));
-  assert.throws(() => verifyReleaseDirectory(sample.directory, { config: sample.config }), /https:\/\/github.com/);
+  assert.throws(() => verifyReleaseDirectory(sample.directory, { config: sample.config }), {
+    code: 'ERR_ASSERTION',
+    actual: 'https://example.com/untrusted.exe',
+    expected: `https://github.com/example/netvision/releases/download/${tag}/${sample.assets.installer}`,
+  });
 });
 
 test('checks the four locally rebuilt installer assets without weakening the full-release default', (t) => {

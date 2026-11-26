@@ -25,6 +25,16 @@
 .env
 .env.*
 !.env.example
+.npmrc
+.netrc
+_netrc
+.git-credentials
+/.git/config.local
+/.git/secrets/
+/.cargo/credentials
+/.cargo/credentials.toml
+id_rsa
+id_ed25519
 *.key
 *.key.*
 *.pem
