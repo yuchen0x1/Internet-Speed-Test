@@ -393,7 +393,7 @@ mod tests {
     fn proxy_credentials_can_contain_equals() {
         let entries = parse_proxy_entries("http://user:p=ss@127.0.0.1:8080").unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].url.password(), Some("p=ss"));
+        assert_eq!(entries[0].url.password(), Some("p%3Dss"));
         assert_eq!(entries[0].scheme, None);
     }
 
