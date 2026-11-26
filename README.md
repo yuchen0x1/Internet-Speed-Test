@@ -12,9 +12,9 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 <!-- github-release:start -->
 
-**[v1.15.4](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.4)** · 2026-11-26
+**[v1.15.5](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.5)** · 2026-11-26
 
-工作区清理：移除本地 dist/、src-tauri/target/ 和旧版发布说明副本；保留 node\_modules/ 与历史发布验收证据。
+本次为维护更新，清理本地旧版下载验收缓存与远程失效分支的构建缓存，并缩短 CLI 临时产物保留期。不包含应用功能、依赖或数据格式变更，无需迁移配置和历史记录。
 
 [全部发行记录](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
