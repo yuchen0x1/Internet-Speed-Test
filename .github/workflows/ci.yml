@@ -50,9 +50,9 @@ jobs:
           tool: cargo-audit
 
       - name: 检查 Rust 漏洞
-        # 默认仅在发现真实漏洞时失败。unmaintained/unsound 告警(proc-macro-error、
-        # zbus/zvariant、glib 等)来自 Linux 侧/构建期传递依赖,Windows 构建目标不包含,
-        # 人工复核后不阻断构建,详见 README「安全修复」。
+        # 已知漏洞阻断；维护性/unsound 告警继续完整输出并复核构建范围。
+        # chrono 是直接运行时依赖，其余当前告警来自未发布的 Linux 桌面依赖树。
+        # 不通过 ignore 隐藏告警；各公告和残余风险见 SECURITY.md。
         run: cargo audit --file src-tauri/Cargo.lock
 
       - name: Rust 格式检查
