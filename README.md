@@ -12,9 +12,9 @@ NetVision Pro 面向需要了解真实网络质量的个人用户、开发者和
 
 <!-- github-release:start -->
 
-**[v1.15.3](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.3)** · 2026-11-25
+**[v1.15.4](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.4)** · 2026-11-26
 
-默认浅色主题：首次运行或配置缺少主题字段时使用浅色模式，仍可在设置中选择深色或跟随系统。
+工作区清理：移除本地 dist/、src-tauri/target/ 和旧版发布说明副本；保留 node\_modules/ 与历史发布验收证据。
 
 [全部发行记录](https://github.com/yuchen0x1/Internet-Speed-Test/releases)
 
