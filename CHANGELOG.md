@@ -4,9 +4,19 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.15.4` 为不含应用功能变更的维护版本；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.4) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
+`v1.15.5` 为不含应用功能变更的维护版本；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.5) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
 
 本文件由 [完整更新日志](docs/releases/release-notes.md) 自动同步；请修改该维护入口后运行 `npm run docs:sync`。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
+
+<a id="v1-15-5"></a>
+
+## v1.15.5 (2026-11-26)
+
+- 维护版本，不包含应用功能、依赖、设置或数据格式变更；无需迁移配置或历史数据。
+- 清理本地 30 个旧版下载验收文件和一次性草稿，共 32,927,625 字节；清理已删除分支及已合并 PR 的 27 条 GitHub Actions 缓存，共 4,984,664,885 字节。
+- 将四平台 CLI 临时构建产物保留期设为 7 天；正式 Release 安装包、更新清单、签名、校验文件及历史验收文档继续保留。
+- 保持产品标识、稳定版更新地址与签名公钥；v1.11.0 用户可在设置中手动检查更新，v1.12.0 起按自动检查开关及检查间隔提示新版本，需能访问 GitHub。
+- 本地验证：13 个前端测试文件、81 项测试、TypeScript/生产构建、统一版本、文档同步、IPC 契约、依赖安全策略与 Rust 格式检查通过。Rust 测试、严格 Clippy 及四平台 CLI 构建由 CI 和标签发布工作流执行；未执行真实桌面覆盖升级验收。
 
 <a id="v1-15-4"></a>
 
