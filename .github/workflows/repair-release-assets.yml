@@ -76,9 +76,13 @@ jobs:
         run: |
           npm run security:check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path scripts/check-dependency-patches.mjs) {
+            node scripts/check-dependency-patches.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           cargo audit --file src-tauri/Cargo.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --test .release-tools/scripts/tests/release-assets.node.mjs
+          node --test .release-tools/scripts/tests/release-assets.node.mjs .release-tools/scripts/tests/verify-public-release.node.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -133,6 +137,14 @@ jobs:
           test -s release-artifacts/latest.json
           test -s release-artifacts/SHA256SUMS.txt
 
+          node .release-tools/scripts/verify-public-release.mjs release-artifacts "$VERSION" --installer-only
           node .release-tools/scripts/upload-missing-release-assets.mjs "$RELEASE_TAG"
 
           gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
+
+      - name: Verify restored public release and updater compatibility
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node .release-tools/scripts/verify-public-release.mjs --published "$RELEASE_TAG"

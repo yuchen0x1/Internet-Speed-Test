@@ -308,7 +308,7 @@ pub async fn settings_export(
     let backup = SettingsBackup {
         format: SETTINGS_BACKUP_FORMAT.into(),
         schema_version: SETTINGS_BACKUP_VERSION,
-        exported_at: chrono::Local::now().to_rfc3339(),
+        exported_at: crate::time_support::local_now_rfc3339(),
         app_version: env!("CARGO_PKG_VERSION").into(),
         settings,
     };
@@ -1014,7 +1014,7 @@ async fn record_diag(
         return;
     }
     let storage = state.storage.clone();
-    let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let created_at = crate::time_support::local_now();
     let kind = kind.to_string();
     let target = target.map(|s| s.to_string());
     let res = tokio::task::spawn_blocking(move || {

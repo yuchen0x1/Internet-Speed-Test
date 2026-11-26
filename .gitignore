@@ -60,6 +60,8 @@ auto_test_state.json
 *.bak
 *.bak.*
 *.orig
+# Keep the unchanged upstream manifests for reviewed dependency patches.
+!/vendor/*/Cargo.toml.orig
 *.rej
 nul
 .DS_Store

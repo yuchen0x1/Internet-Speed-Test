@@ -142,7 +142,7 @@ impl BatchInner {
         self.token = Some(token.clone());
         self.snapshot = Some(BatchSnapshot {
             run_id: self.gen,
-            started_at: chrono::Local::now().to_rfc3339(),
+            started_at: crate::time_support::local_now_rfc3339(),
             revision: 0,
             running: true,
             cancelled: false,

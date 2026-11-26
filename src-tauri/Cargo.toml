@@ -1,6 +1,6 @@
 [package]
 name = "netvision-pro"
-version = "1.15.7"
+version = "1.15.8"
 description = "NetVision Pro - 专业级桌面网络测速与诊断软件"
 authors = ["NetVision Pro"]
 edition = "2021"
@@ -29,7 +29,7 @@ tauri-build = { version = "2", features = [], optional = true }
 [dependencies]
 async-trait = "0.1.92"
 bytes = "1.12.1"
-chrono = { version = "0.4.45", features = ["serde"] }
+jiff = "1.0.3"
 futures-core = "0.3.34"
 futures-util = "0.3.34"
 hostname = "0.4.2"
@@ -57,6 +57,14 @@ tokio-util = { version = "0.7.20", features = ["rt"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_Console"] }
 winreg = "0.56.0"
+
+[patch.crates-io]
+glib = { path = "../vendor/glib-0.18.5" }
+glib-macros = { path = "../vendor/glib-macros-0.18.5" }
+gtk3-macros = { path = "../vendor/gtk3-macros-0.18.2" }
+serde_with = { path = "../vendor/serde_with" }
+tauri-plugin-notification = { path = "../vendor/tauri-plugin-notification-2.8.1" }
+tauri-plugin-single-instance = { path = "../vendor/tauri-plugin-single-instance-2.5.5" }
 
 [profile.release]
 opt-level = 3

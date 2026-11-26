@@ -50,7 +50,10 @@ pub fn short_id() -> String {
     format!(
         "{:08x}{:08x}",
         r.random::<u32>(),
-        chrono::Utc::now().timestamp_millis() as u32
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u32
     )
 }
 

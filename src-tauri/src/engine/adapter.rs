@@ -143,7 +143,10 @@ pub async fn measure_http_rtt(
     url: &str,
     token: &CancellationToken,
 ) -> Result<f64, String> {
-    let nonce = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let t0 = std::time::Instant::now();
     let fut = client
         .get(url)

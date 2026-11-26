@@ -50,23 +50,13 @@ pub fn build_metrics_text(
         }
         s.push_str("# HELP netvision_last_test_timestamp Last test Unix timestamp (seconds)\n");
         s.push_str("# TYPE netvision_last_test_timestamp gauge\n");
-        if let Some(ts) = local_timestamp(&r.created_at, &chrono::Local) {
+        if let Some(ts) =
+            crate::time_support::history_timestamp(&r.created_at, &jiff::tz::TimeZone::system())
+        {
             s.push_str(&format!("netvision_last_test_timestamp {ts}\n"));
         }
     }
     s
-}
-
-fn local_timestamp<T: chrono::TimeZone>(value: &str, zone: &T) -> Option<i64> {
-    // Newer offset-bearing records are unambiguous; legacy records use local time.
-    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(value) {
-        return Some(ts.timestamp());
-    }
-    let ts = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").ok()?;
-    // Omit ambiguous/nonexistent DST times rather than inventing an instant.
-    zone.from_local_datetime(&ts)
-        .single()
-        .map(|ts| ts.timestamp())
 }
 
 fn scrape_text(snapshot: &crate::storage::HistoryMetrics, connected: bool) -> String {
@@ -334,23 +324,6 @@ mod tests {
         assert!(text.contains("netvision_network_connected 0"));
         assert!(!text.contains("netvision_last_download_mbps"));
     }
-    #[test]
-    fn timestamp_respects_local_offset_and_unknown_values() {
-        let zone = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
-        let expected = chrono::DateTime::parse_from_rfc3339("2026-11-13T12:00:00+08:00")
-            .unwrap()
-            .timestamp();
-        assert_eq!(
-            local_timestamp("2026-11-13 12:00:00", &zone),
-            Some(expected)
-        );
-        assert_eq!(
-            local_timestamp("2026-11-13T12:00:00+08:00", &zone),
-            Some(expected)
-        );
-        assert_eq!(local_timestamp("invalid", &zone), None);
-    }
-
     #[test]
     fn routes_match_exact_path_and_method() {
         for (line, status) in [

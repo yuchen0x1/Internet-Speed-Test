@@ -1,0 +1,77 @@
+name: Linux desktop dependency patches
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patched-dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.22.2
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@263313d2989f864a2b8613f97277288638e7d8f8 # 1.99.1
+
+      - name: Install Linux desktop and test libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            libssl-dev librsvg2-dev patchelf xvfb xauth dbus-x11
+
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          workspaces: src-tauri
+          key: linux-desktop-patches
+
+      - name: Verify the local patch sources and prepare frontend assets
+        run: |
+          node scripts/check-dependency-patches.mjs
+          npm ci --registry=https://registry.npmjs.org
+          npm run build
+
+      - name: Compile the actual Linux desktop dependency paths
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Test patched GLib and D-Bus plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Dependency test targets need their own dev dependencies; run their
+          # manifests directly with the exact same local patches as the app.
+          patches=(
+            --config "patch.crates-io.glib.path='${GITHUB_WORKSPACE}/vendor/glib-0.18.5'"
+            --config "patch.crates-io.glib-macros.path='${GITHUB_WORKSPACE}/vendor/glib-macros-0.18.5'"
+            --config "patch.crates-io.gtk3-macros.path='${GITHUB_WORKSPACE}/vendor/gtk3-macros-0.18.2'"
+            --config "patch.crates-io.tauri-plugin-notification.path='${GITHUB_WORKSPACE}/vendor/tauri-plugin-notification-2.8.1'"
+            --config "patch.crates-io.tauri-plugin-single-instance.path='${GITHUB_WORKSPACE}/vendor/tauri-plugin-single-instance-2.5.5'"
+            --config "patch.crates-io.serde_with.path='${GITHUB_WORKSPACE}/vendor/serde_with'"
+          )
+          cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml "${patches[@]}" \
+            --release --lib variant_str_iter_mutable_out_pointer_regression
+          cargo test --manifest-path vendor/glib-macros-0.18.5/Cargo.toml "${patches[@]}" --lib
+          cargo test --manifest-path vendor/gtk3-macros-0.18.2/Cargo.toml "${patches[@]}" --lib
+          cargo test --manifest-path vendor/tauri-plugin-notification-2.8.1/Cargo.toml "${patches[@]}" --lib
+          xvfb-run -a dbus-run-session -- cargo test \
+            --manifest-path vendor/tauri-plugin-single-instance-2.5.5/Cargo.toml \
+            "${patches[@]}" --test dbus_errors -- --ignored --test-threads=1
+          xvfb-run -a dbus-run-session -- cargo test \
+            --manifest-path vendor/tauri-plugin-single-instance-2.5.5/Cargo.toml \
+            "${patches[@]}" --test instance_lock -- --include-ignored --test-threads=1

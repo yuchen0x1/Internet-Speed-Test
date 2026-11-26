@@ -196,7 +196,7 @@ impl SpeedTestEngine {
         storage: Arc<Storage>,
     ) -> TestResult {
         let Some(token) = self.try_activate() else {
-            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            let now = crate::time_support::local_now();
             let mut result = TestResult {
                 id: util::short_id(),
                 started_at: now.clone(),
@@ -244,7 +244,7 @@ impl SpeedTestEngine {
         let t0 = Instant::now();
         let mut result = TestResult {
             id: util::short_id(),
-            started_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            started_at: crate::time_support::local_now(),
             ..Default::default()
         };
         let cfg = EngineConfig {
@@ -327,7 +327,7 @@ impl SpeedTestEngine {
                 }
             }
         }
-        result.finished_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        result.finished_at = crate::time_support::local_now();
         result.duration_ms = t0.elapsed().as_millis() as u64;
         // 所有终态先等待写库，再通知 UI 刷新；失败/取消也携带本次完整结果。
         // 保存失败仍展示真实测量值，并单独提示，不能伪装成已保存。
