@@ -398,6 +398,14 @@ async fn icmp_ping_api(host: &str, count: u32, timeout_ms: u32) -> Option<PingOu
 
 /// 兜底:系统 ping 子进程(覆盖 IPv6 与 API 不可用场景)
 async fn icmp_ping_subprocess(host: &str, count: u32, timeout_ms: u32) -> PingOutput {
+    if !valid_host(host) {
+        return PingOutput {
+            loss_percent: None,
+            rtts_ms: vec![],
+            avg_ms: None,
+        };
+    }
+    let count = count.clamp(1, 64);
     let timeout_ms = timeout_ms.clamp(100, 10_000);
     let mut cmd = tokio::process::Command::new("ping");
     #[cfg(windows)]
@@ -1331,14 +1339,17 @@ pub fn parse_stun_response(buf: &[u8], txid: &[u8; 12]) -> Option<MappedAddress>
         return None;
     }
     let msg_type = u16::from_be_bytes([buf[0], buf[1]]);
-    if msg_type != 0x0101 {
+    if msg_type != 0x0101 || buf[4..8] != 0x2112A442u32.to_be_bytes() {
         return None; // 仅接受 Binding Success Response
     }
     if &buf[8..20] != txid.as_slice() {
         return None; // 事务 ID 不匹配
     }
     let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-    let end = (20 + len).min(buf.len());
+    if !len.is_multiple_of(4) || 20 + len > buf.len() {
+        return None;
+    }
+    let end = 20 + len;
     let mut pos = 20usize;
     while pos + 4 <= end {
         let attr = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
@@ -1347,7 +1358,11 @@ pub fn parse_stun_response(buf: &[u8], txid: &[u8; 12]) -> Option<MappedAddress>
         if vstart + alen > end {
             break;
         }
-        if alen >= 8 && (attr == 0x0020 || attr == 0x0001) {
+        if alen == 8
+            && (attr == 0x0020 || attr == 0x0001)
+            && buf[vstart] == 0
+            && buf[vstart + 1] == 0x01
+        {
             let port_raw = u16::from_be_bytes([buf[vstart + 2], buf[vstart + 3]]);
             let (ip, port) = if attr == 0x0020 {
                 let xored = u32::from_be_bytes([
@@ -1379,7 +1394,7 @@ pub fn parse_stun_response(buf: &[u8], txid: &[u8; 12]) -> Option<MappedAddress>
 }
 
 /// 向单个 STUN 服务器发起 Binding Request
-async fn stun_probe(host: &str, port: u16) -> NatServerEntry {
+async fn stun_probe(sock: &tokio::net::UdpSocket, host: &str, port: u16) -> NatServerEntry {
     let base = NatServerEntry {
         server: format!("{host}:{port}"),
         ok: false,
@@ -1393,18 +1408,10 @@ async fn stun_probe(host: &str, port: u16) -> NatServerEntry {
     let packet = build_stun_request(txid);
 
     let res = tokio::time::timeout(Duration::from_millis(3500), async move {
-        use tokio::net::UdpSocket;
         let mut addrs = tokio::net::lookup_host((host, port))
             .await
             .map_err(|e| e.to_string())?;
         let addr = addrs.find(|a| a.is_ipv4()).ok_or("无 IPv4 解析记录")?;
-        let sock = UdpSocket::bind(if addr.is_ipv4() {
-            "0.0.0.0:0"
-        } else {
-            "[::]:0"
-        })
-        .await
-        .map_err(|e| e.to_string())?;
         sock.connect(addr).await.map_err(|e| e.to_string())?;
         sock.send(&packet).await.map_err(|e| e.to_string())?;
         let mut buf = [0u8; 256];
@@ -1450,9 +1457,23 @@ pub async fn nat_type() -> NatReport {
                 .and_then(|x| x.parse::<std::net::Ipv4Addr>().ok())
         });
 
+    // Mapping comparisons require the same local UDP endpoint for every
+    // destination; separate ephemeral ports can falsely imply symmetric NAT.
+    let socket = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+        Ok(socket) => socket,
+        Err(_) => {
+            return NatReport {
+                nat_type: "未知".into(),
+                local_ip: local.map(|i| i.to_string()),
+                servers: Vec::new(),
+                note: Some("无法创建 NAT 检测所需的 UDP 套接字".into()),
+            };
+        }
+    };
+    let local_port = socket.local_addr().ok().map(|addr| addr.port());
     let mut servers = Vec::new();
     for (h, p) in STUN_SERVERS {
-        servers.push(stun_probe(h, *p).await);
+        servers.push(stun_probe(&socket, h, *p).await);
     }
 
     let ok: Vec<&NatServerEntry> = servers
@@ -1475,7 +1496,12 @@ pub async fn nat_type() -> NatReport {
             let b_ip = b.mapped_ip.clone().unwrap_or_default();
             let a_port = a.mapped_port.unwrap_or(0);
             let b_port = b.mapped_port.unwrap_or(0);
-            if local.map(|l| l.to_string()) == Some(a_ip.clone()) && local.is_some() {
+            if local.map(|l| l.to_string()) == Some(a_ip.clone())
+                && local.is_some()
+                && local_port == Some(a_port)
+                && a_ip == b_ip
+                && a_port == b_port
+            {
                 (
                     "公网直连".to_string(),
                     Some("外部映射地址与本机地址一致,未经过 NAT".to_string()),
@@ -1834,6 +1860,85 @@ BSSID         : 84:16:f9:aa:bb:cc\r\n\
         let mut buf2 = build_stun_request(txid);
         buf2[8..20].copy_from_slice(&other);
         assert!(parse_stun_response(&buf2, &txid).is_none());
+    }
+
+    fn stun_response_fixture(txid: [u8; 12], addr: std::net::SocketAddrV4) -> Vec<u8> {
+        let mut response = build_stun_request(txid);
+        response[..2].copy_from_slice(&0x0101u16.to_be_bytes());
+        response[2..4].copy_from_slice(&12u16.to_be_bytes());
+        response.extend_from_slice(&0x0020u16.to_be_bytes());
+        response.extend_from_slice(&8u16.to_be_bytes());
+        response.extend_from_slice(&[0, 1]);
+        response.extend_from_slice(&(addr.port() ^ 0x2112).to_be_bytes());
+        response.extend_from_slice(&(u32::from(*addr.ip()) ^ 0x2112A442).to_be_bytes());
+        response
+    }
+
+    #[test]
+    fn stun_rejects_bad_cookie_truncation_and_ipv6_mapping() {
+        let txid = [17u8; 12];
+        let address = "192.0.2.1:12345".parse().unwrap();
+        let valid = stun_response_fixture(txid, address);
+        assert!(parse_stun_response(&valid, &txid).is_some());
+
+        let mut bad_cookie = valid.clone();
+        bad_cookie[4] ^= 1;
+        assert!(parse_stun_response(&bad_cookie, &txid).is_none());
+
+        let mut truncated = valid.clone();
+        truncated[2..4].copy_from_slice(&16u16.to_be_bytes());
+        assert!(parse_stun_response(&truncated, &txid).is_none());
+
+        let mut ipv6 = valid;
+        ipv6[25] = 2;
+        ipv6[22..24].copy_from_slice(&20u16.to_be_bytes());
+        ipv6[2..4].copy_from_slice(&24u16.to_be_bytes());
+        ipv6.extend_from_slice(&[0; 12]);
+        assert!(parse_stun_response(&ipv6, &txid).is_none());
+    }
+
+    #[tokio::test]
+    async fn stun_destinations_share_endpoint_and_ignore_stale_transactions() {
+        async fn server() -> (u16, tokio::task::JoinHandle<std::net::SocketAddr>) {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            let task = tokio::spawn(async move {
+                let mut packet = [0u8; 512];
+                let (len, peer) =
+                    tokio::time::timeout(Duration::from_secs(5), socket.recv_from(&mut packet))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(len, 20);
+                let txid: [u8; 12] = packet[8..20].try_into().unwrap();
+                let std::net::SocketAddr::V4(mapped) = peer else {
+                    panic!("IPv4 fixture expected");
+                };
+                let mut stale_txid = txid;
+                stale_txid[0] ^= 1;
+                let stale_mapping = std::net::SocketAddrV4::new(*mapped.ip(), 1);
+                socket
+                    .send_to(&stun_response_fixture(stale_txid, stale_mapping), peer)
+                    .await
+                    .unwrap();
+                socket
+                    .send_to(&stun_response_fixture(txid, mapped), peer)
+                    .await
+                    .unwrap();
+                peer
+            });
+            (port, task)
+        }
+
+        let (first_port, first_server) = server().await;
+        let (second_port, second_server) = server().await;
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let first = stun_probe(&socket, "127.0.0.1", first_port).await;
+        let second = stun_probe(&socket, "127.0.0.1", second_port).await;
+        assert!(first.ok && second.ok);
+        assert_eq!(first.mapped_ip, second.mapped_ip);
+        assert_eq!(first.mapped_port, second.mapped_port);
+        assert_eq!(first_server.await.unwrap(), second_server.await.unwrap());
     }
 
     /// 真实网络:MTR 式路由质量(对公共 DNS,少跳数快验证)

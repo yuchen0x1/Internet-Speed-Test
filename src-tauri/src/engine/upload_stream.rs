@@ -1,10 +1,11 @@
-//! 上传数据流:以固定粒度生成不可压缩随机数据,并逐块累计真实发送字节数。
+//! 上传数据流:以固定粒度生成不可压缩随机数据,累计交给 HTTP 客户端的字节数。
 //!
 //! 设计要点:
 //! - 数据源为随机池(避免传输层/服务器对重复数据的优化干扰测速)。
-//! - 以 64KB 粒度产出子块并计数,使实时速度曲线平滑;取消时最多多计一个子块。
+//! - 以 64KB 粒度产出子块;产出量不等于套接字写入量或远端接收量。
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -20,6 +21,7 @@ pub struct ChunkedBody {
     token: CancellationToken,
     count_immediately: bool,
     finished: bool,
+    produced: Arc<AtomicU64>,
 }
 
 impl ChunkedBody {
@@ -57,11 +59,16 @@ impl ChunkedBody {
             token,
             count_immediately,
             finished: false,
+            produced: Arc::new(AtomicU64::new(0)),
         }
     }
 
+    pub fn produced_bytes(&self) -> Arc<AtomicU64> {
+        self.produced.clone()
+    }
+
     fn next_slice(&mut self) -> Option<&[u8]> {
-        if self.remaining == 0 || self.token.is_cancelled() {
+        if self.remaining == 0 || self.pool.is_empty() || self.token.is_cancelled() {
             return None;
         }
         let take = self.granularity.min(self.remaining);
@@ -71,6 +78,8 @@ impl ChunkedBody {
             self.offset = end;
             self.remaining -= take;
             let slice = &self.pool[start..end];
+            self.produced
+                .fetch_add(slice.len() as u64, Ordering::Relaxed);
             self.counters.add_sent(slice.len() as u64);
             if self.count_immediately {
                 self.counters.add_bytes(slice.len() as u64);
@@ -82,6 +91,8 @@ impl ChunkedBody {
             self.offset = 0;
             self.remaining -= first;
             let slice = &self.pool[start..];
+            self.produced
+                .fetch_add(slice.len() as u64, Ordering::Relaxed);
             self.counters.add_sent(slice.len() as u64);
             if self.count_immediately {
                 self.counters.add_bytes(slice.len() as u64);
@@ -89,6 +100,23 @@ impl ChunkedBody {
             Some(slice)
         }
     }
+}
+
+/// Require the entire body to have been produced before crediting a successful
+/// HTTP response. This is an HTTP-level estimate, not remote byte telemetry;
+/// producing the body alone does not prove that the peer received it in full.
+pub fn commit_completed_upload(
+    counters: &ThroughputCounters,
+    produced: &AtomicU64,
+    expected: usize,
+) -> bool {
+    if produced.load(Ordering::Relaxed) != expected as u64 {
+        counters.add_failure();
+        counters.set_phase_error("上传服务在请求体产出完成前返回成功，未计入该请求");
+        return false;
+    }
+    counters.commit_accepted(expected as u64);
+    true
 }
 
 impl futures_core::Stream for ChunkedBody {
@@ -163,5 +191,52 @@ mod tests {
         assert_eq!(counters.sent(), 4096);
         assert_eq!(counters.total(), 0);
         assert_eq!(counters.accepted(), 0);
+    }
+
+    #[test]
+    fn early_success_does_not_credit_unproduced_upload_bytes() {
+        let counters = Arc::new(ThroughputCounters::default());
+        let mut body = ChunkedBody::new_untracked(
+            vec![3u8; 1024],
+            4096,
+            counters.clone(),
+            CancellationToken::new(),
+        );
+        let produced = body.produced_bytes();
+        let _ = futures_core::Stream::poll_next(
+            Pin::new(&mut body),
+            &mut Context::from_waker(std::task::Waker::noop()),
+        );
+        assert_eq!(produced.load(Ordering::Relaxed), 1024);
+        assert!(!commit_completed_upload(&counters, &produced, 4096));
+        assert_eq!(counters.total(), 0);
+        assert_eq!(counters.accepted(), 0);
+        assert_eq!(counters.failure_count(), 1);
+    }
+
+    #[test]
+    fn complete_success_credits_only_its_own_request() {
+        let counters = Arc::new(ThroughputCounters::default());
+        counters.add_sent(1_000_000);
+        let mut body = ChunkedBody::new_untracked(
+            vec![3u8; 1024],
+            4096,
+            counters.clone(),
+            CancellationToken::new(),
+        );
+        let produced = body.produced_bytes();
+        assert_eq!(collect(&mut body), 4096);
+        assert!(commit_completed_upload(&counters, &produced, 4096));
+        assert_eq!(counters.total(), 4096);
+        assert_eq!(counters.accepted(), 4096);
+    }
+
+    #[test]
+    fn empty_pool_finishes_instead_of_producing_empty_chunks_forever() {
+        let counters = Arc::new(ThroughputCounters::default());
+        let mut body =
+            ChunkedBody::new(Vec::new(), 4096, counters.clone(), CancellationToken::new());
+        assert_eq!(collect(&mut body), 0);
+        assert_eq!(counters.sent(), 0);
     }
 }

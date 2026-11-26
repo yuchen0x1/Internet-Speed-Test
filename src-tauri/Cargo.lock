@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "netvision-pro"
-version = "1.15.6"
+version = "1.15.7"
 dependencies = [
  "async-trait",
  "bytes",

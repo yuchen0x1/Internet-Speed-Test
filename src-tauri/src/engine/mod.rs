@@ -41,7 +41,7 @@ use selector::ServerRegistry;
 /// 预热期:剔除 TCP 慢启动与 TLS 握手对均值的影响
 pub const WARMUP_MS: f64 = 1_200.0;
 /// 看门狗:计数器连续停滞 4s 且存在请求失败 → 判定网络中断
-const STALL_SAMPLES: u32 = 20;
+const STALL_TIMEOUT: Duration = Duration::from_secs(4);
 const SAMPLE_INTERVAL_MS: u64 = 200;
 
 /// 事件出口抽象:引擎与 UI/CLI 解耦
@@ -883,6 +883,7 @@ impl SpeedTestEngine {
         parent: &CancellationToken,
         samples_out: &mut Vec<[f64; 2]>,
     ) -> PhaseOutcome {
+        let phase_started = Instant::now();
         let child = parent.child_token();
         let counters = Arc::new(ThroughputCounters::default());
         let samples = Arc::new(Mutex::new(Vec::<[f64; 2]>::new()));
@@ -942,6 +943,7 @@ impl SpeedTestEngine {
                 .run_upload(node, counters.clone(), cfg_phase, child.clone())
                 .await;
         }
+        let observed_phase_ms = phase_started.elapsed().as_secs_f64() * 1000.0;
         child.cancel();
         // 等两个后台任务确认退出(替代固定 280ms 等待):样本与负载延迟读取无竞态
         let _ = sampler_handle.await;
@@ -957,11 +959,11 @@ impl SpeedTestEngine {
             return PhaseOutcome::Failed("数据传输完全停滞(疑似网络中断或服务器故障)".into());
         }
         // 预热结束时已发送的字节数(从字节日志取第一个 ≥ WARMUP 的点)
-        let warmup_bytes = crate::safe_lock::lock(&bytes_log)
+        let (sampled_warmup_ms, warmup_bytes) = crate::safe_lock::lock(&bytes_log)
             .iter()
             .find(|(ms, _)| *ms as f64 >= WARMUP_MS)
-            .map(|(_, b)| *b)
-            .unwrap_or(bytes);
+            .map(|(ms, b)| (*ms as f64, *b))
+            .unwrap_or((observed_phase_ms, bytes));
         let loaded_median = {
             let mut v = crate::safe_lock::lock(&loaded).clone();
             if v.is_empty() {
@@ -983,7 +985,7 @@ impl SpeedTestEngine {
                     .map(|bytes| (duration_ms, WARMUP_MS, bytes))
                     .unwrap_or((duration_ms, 0.0, 0))
             })
-            .unwrap_or((duration.as_secs_f64() * 1000.0, WARMUP_MS, warmup_bytes));
+            .unwrap_or((observed_phase_ms, sampled_warmup_ms, warmup_bytes));
         PhaseOutcome::Ok(
             bytes,
             failures,
@@ -1068,8 +1070,9 @@ async fn sampler_task(
     direction: String,
 ) {
     let mut last_bytes: u64 = 0;
-    let mut stall_count: u32 = 0;
-    let mut elapsed_ms: u64 = 0;
+    let started = Instant::now();
+    let mut last_sample = started;
+    let mut last_progress = started;
     loop {
         if token.is_cancelled() {
             return;
@@ -1078,9 +1081,11 @@ async fn sampler_task(
         if token.is_cancelled() {
             return;
         }
-        elapsed_ms += SAMPLE_INTERVAL_MS;
+        let now = Instant::now();
+        let elapsed_ms = now.duration_since(started).as_millis() as u64;
         let cur = counters.total();
-        let inst_bps = cur.saturating_sub(last_bytes) as f64 / (SAMPLE_INTERVAL_MS as f64 / 1000.0);
+        let sample_secs = now.duration_since(last_sample).as_secs_f64();
+        let inst_bps = cur.saturating_sub(last_bytes) as f64 / sample_secs;
         let mbps = bytes_per_sec_to_mbps(inst_bps);
 
         crate::safe_lock::lock(samples).push([elapsed_ms as f64, mbps]);
@@ -1093,16 +1098,16 @@ async fn sampler_task(
 
         // 停滞看门狗:连续 4s 字节无增长且存在失败 → 判定中断,提前结束该阶段
         if cur == last_bytes {
-            stall_count += 1;
-            if stall_count >= STALL_SAMPLES && counters.failure_count() > 0 {
+            if now.duration_since(last_progress) >= STALL_TIMEOUT && counters.failure_count() > 0 {
                 stalled.store(true, Ordering::SeqCst);
                 token.cancel();
                 return;
             }
         } else {
-            stall_count = 0;
+            last_progress = now;
         }
         last_bytes = cur;
+        last_sample = now;
     }
 }
 
@@ -1136,6 +1141,58 @@ async fn loaded_ping_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn delayed_sampler_uses_actual_time_instead_of_nominal_interval() {
+        let counters = Arc::new(ThroughputCounters::default());
+        let samples = Arc::new(Mutex::new(Vec::new()));
+        let bytes_log = Arc::new(Mutex::new(Vec::new()));
+        let token = CancellationToken::new();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = {
+            let counters = counters.clone();
+            let samples = samples.clone();
+            let bytes_log = bytes_log.clone();
+            let token = token.clone();
+            tokio::spawn(async move {
+                let _ = ready_tx.send(());
+                sampler_task(
+                    &EventSink::Discard,
+                    &counters,
+                    &samples,
+                    &bytes_log,
+                    &token,
+                    &AtomicBool::new(false),
+                    "download".into(),
+                )
+                .await;
+            })
+        };
+        ready_rx.await.unwrap();
+        counters.add_bytes(1_000_000);
+        // Hold this current-thread runtime past the timer's nominal deadline.
+        std::thread::sleep(Duration::from_millis(450));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !crate::safe_lock::lock(&samples).is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        token.cancel();
+        task.await.unwrap();
+
+        let first = crate::safe_lock::lock(&samples)[0];
+        assert!(
+            first[0] >= 400.0,
+            "sample timestamps must include delayed time"
+        );
+        assert!(first[1] > 0.0 && first[1] <= 20.0);
+        assert_eq!(crate::safe_lock::lock(&bytes_log)[0].1, 1_000_000);
+    }
 
     #[test]
     fn test_manual_node_fallback_https_only() {

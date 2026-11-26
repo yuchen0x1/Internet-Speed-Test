@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, onMonitorTick } from "../api";
+import { api, onMonitorTick, onNetStatus } from "../api";
 import { runSettingsMutation, useApp, useMonitor } from "./app";
 import type { AppSettings, MonitorTick } from "../types";
 
@@ -9,6 +9,7 @@ vi.mock("../api", () => ({
   api: {
     setSettings: vi.fn(),
     getSettings: vi.fn(),
+    settingsImport: vi.fn(),
     appInfo: vi.fn(),
     netStatus: vi.fn(),
     monitorPaused: vi.fn(),
@@ -135,6 +136,26 @@ describe("updateSettings", () => {
     expect(useApp.getState().settings?.theme).toBe("system");
   });
 
+  it("serializes imported settings between pending and subsequent saves", async () => {
+    let finishFirst!: () => void;
+    vi.mocked(api.setSettings).mockImplementationOnce((settings) => new Promise((resolve) => {
+      finishFirst = () => resolve(settings);
+    }));
+    const imported = { ...baseSettings, test_duration_secs: 30, proxy_mode: "direct" as const };
+    vi.mocked(api.settingsImport).mockResolvedValueOnce(imported);
+    vi.mocked(api.getSettings).mockResolvedValueOnce(imported);
+    const first = useApp.getState().updateSettings({ autostart: true });
+    await Promise.resolve();
+    const importing = runSettingsMutation(() => api.settingsImport());
+    const last = useApp.getState().updateSettings({ theme: "light" });
+    expect(api.settingsImport).not.toHaveBeenCalled();
+    finishFirst();
+    await Promise.all([first, importing, last]);
+    expect(api.setSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      autostart: false, test_duration_secs: 30, proxy_mode: "direct", theme: "light",
+    }));
+  });
+
   it("persist=false:不调用后端也返回 true", async () => {
     const ok = await useApp.getState().updateSettings({ test_duration_secs: 20 }, false);
     expect(ok).toBe(true);
@@ -199,5 +220,31 @@ describe("monitor binding", () => {
     await useMonitor.getState().backfill(300);
     expect(useMonitor.getState().buffer.map(t => t.ts_ms)).toEqual([1000, 2000, 4000]);
     expect(useMonitor.getState().latest).toEqual(live);
+  });
+});
+
+describe("network status binding", () => {
+  it("handles subscription failure, shares a retry, and keeps receiving live changes", async () => {
+    const toast = vi.fn();
+    useApp.setState({ toast });
+    vi.mocked(onNetStatus).mockRejectedValueOnce(new Error("not ready"));
+    await expect(useApp.getState().bindNetwork()).resolves.toBeUndefined();
+    expect(toast).toHaveBeenCalledWith("warn", expect.stringContaining("网络状态监听失败"));
+
+    let complete!: () => void;
+    vi.mocked(onNetStatus).mockImplementationOnce((handler) => new Promise((resolve) => {
+      complete = () => {
+        handler({ connected: true, kind: "ethernet", iface: "fixture", link_mbps: 1000, ipv4: null, has_ipv6: false });
+        resolve(() => undefined);
+      };
+    }));
+    const first = useApp.getState().bindNetwork();
+    const second = useApp.getState().bindNetwork();
+    expect(onNetStatus).toHaveBeenCalledTimes(2);
+    complete();
+    await Promise.all([first, second]);
+    await useApp.getState().bindNetwork();
+    expect(onNetStatus).toHaveBeenCalledTimes(2);
+    expect(useApp.getState().net).toMatchObject({ connected: true, iface: "fixture" });
   });
 });

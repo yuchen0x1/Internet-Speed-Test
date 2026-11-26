@@ -12,11 +12,11 @@ use super::model::ServerNodeInfo;
 /// 吞吐计数器(多流共享,原子累加)
 #[derive(Debug, Default)]
 pub struct ThroughputCounters {
-    /// 用于测速样本的有效字节:下载为接收量,上传为服务端确认量。
+    /// 下载为接收量；上传为协议确认量(NDT7 遥测或完整产出请求的 HTTP 成功响应)。
     pub total_bytes: AtomicU64,
-    /// 客户端已交给传输层的上传字节数,不等同于服务端确认量。
+    /// 上传流交给 HTTP/WebSocket 客户端的字节数，不代表套接字写入或远端接收。
     pub sent_bytes: AtomicU64,
-    /// 服务端返回成功状态后确认接受的上传字节数。
+    /// 协议确认量；HTTP 成功响应是请求级估计，没有远端逐字节遥测。
     pub accepted_bytes: AtomicU64,
     /// 可选的协议实测时长(微秒);NDT7 从 WebSocket 握手完成后计时。
     measurement_duration_micros: AtomicU64,

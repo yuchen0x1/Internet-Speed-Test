@@ -1,7 +1,7 @@
 // 设置中心:外观 / 测速 / 监控 / 网络 / 隐私 / 关于 —— 所有选项真实生效
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg, onUpdaterProgress } from "../api";
-import { useApp } from "../store/app";
+import { runSettingsMutation, useApp } from "../store/app";
 import { useServers } from "../store/test";
 import { fmtBytes, isCancelError } from "../lib/format";
 import { ConfirmModal, Segmented, SettingRow } from "../components/ui";
@@ -126,11 +126,8 @@ export function SettingsPage() {
   const importSettings = async () => {
     setBackupBusy("import");
     try {
-      const imported = await api.settingsImport();
-      // IPC 返回的是后端已落盘的权威快照，直接替换本地 store，避免
-      // 继续使用导入前的主题、监控和更新开关。
-      useApp.setState({ settings: imported });
-      useApp.getState().applyTheme();
+      // 与在途设置保存共用队列，防止旧快照在导入完成后覆盖新配置。
+      await runSettingsMutation(() => api.settingsImport());
       // 导入可能带来新的自定义节点/节点模式,必须强制刷新而不是命中旧缓存。
       await loadServers(true);
       await refreshPromStatus();

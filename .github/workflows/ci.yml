@@ -67,6 +67,9 @@ jobs:
       - name: 前端单元测试
         run: npm run test
 
+      - name: 发布资产一致性回归测试
+        run: node --test scripts/tests/release-assets.node.mjs
+
       - name: 前端生产构建
         run: npm run build
 

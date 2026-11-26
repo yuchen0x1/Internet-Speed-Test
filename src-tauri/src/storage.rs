@@ -45,8 +45,8 @@ fn history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRow> {
         server_name: row.get(9)?,
         server_provider: row.get(10)?,
         server_url: row.get(11)?,
-        network_type: row.get(12)?,
-        interface_name: row.get(13)?,
+        network_type: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+        interface_name: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
         public_ip: row.get(14)?,
         isp: row.get(15)?,
         status: row.get(16)?,
@@ -496,7 +496,9 @@ impl Storage {
         if days == 0 {
             return Ok(0); // 0 = 永久保留
         }
-        let cutoff = chrono::Local::now() - chrono::Duration::days(days as i64);
+        let cutoff = chrono::Local::now()
+            .checked_sub_signed(chrono::Duration::days(days as i64))
+            .ok_or_else(|| "历史保留期超出支持的日期范围".to_string())?;
         let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
         let n = crate::safe_lock::lock(&self.conn)
             .execute("DELETE FROM history WHERE created_at < ?1", [cutoff_str])
@@ -899,6 +901,36 @@ mod tests {
         assert_eq!(s.list_history(None, None, true, 100).unwrap().len(), 1);
         s.clear_history().unwrap();
         assert_eq!(s.history_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_legacy_history_with_unknown_network_fields_remains_readable() {
+        let s = mem_storage();
+        s.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO history (created_at, network_type, interface_name) VALUES (?1, NULL, NULL)",
+                ["2026-11-07 10:00:00"],
+            )
+            .unwrap();
+        let rows = s.list_history(None, None, true, 100).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].network_type.is_empty());
+        assert!(rows[0].interface_name.is_empty());
+        let latest = s.metrics_snapshot().unwrap().latest.unwrap();
+        assert!(latest.network_type.is_empty());
+        assert!(latest.interface_name.is_empty());
+    }
+
+    #[test]
+    fn test_out_of_range_retention_does_not_panic_or_delete_history() {
+        let s = mem_storage();
+        s.insert_result(&sample_result("completed")).unwrap();
+        assert!(s.cleanup_retention(u32::MAX).is_err());
+        assert_eq!(s.history_count().unwrap(), 1);
+        assert_eq!(s.cleanup_retention(0).unwrap(), 0);
+        assert_eq!(s.history_count().unwrap(), 1);
     }
 
     #[test]

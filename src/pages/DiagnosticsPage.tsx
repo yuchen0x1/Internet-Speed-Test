@@ -87,24 +87,37 @@ export function DiagnosticsPage() {
     traceHost, setTraceHost, trace, setTrace, traceRun, setTraceRun,
     pingHost, setPingHost, ping, setPing, pingRun, setPingRun,
   } = useDiag();
+  const pageSession = React.useRef(0);
+  const baseRequest = React.useRef(0);
+  const batchInFlight = React.useRef(false);
 
-  const loadBase = async (quiet = false) => {
+  const loadBase = async (quiet = false, propagateError = false) => {
+    const session = pageSession.current;
+    const request = ++baseRequest.current;
     try {
       const [l, w, p] = await Promise.all([
         api.diagLocal(),
         api.diagWifi().catch(() => null),
         api.diagPublic().catch(() => null),
       ]);
+      if (session !== pageSession.current || request !== baseRequest.current) return;
       setLocal(l);
       setWifi(w);
       setPub(p);
     } catch (e) {
-      if (!quiet) toast("error", `本地网络信息获取失败:${errMsg(e)}`);
-      throw e;
+      if (session === pageSession.current && request === baseRequest.current && !quiet) {
+        toast("error", `本地网络信息获取失败:${errMsg(e)}`);
+      }
+      if (propagateError) throw e;
     }
   };
   useEffect(() => {
-    loadBase();
+    pageSession.current++;
+    void loadBase();
+    return () => {
+      pageSession.current++;
+      batchInFlight.current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -136,35 +149,44 @@ export function DiagnosticsPage() {
   const batchRunning = batchProgress?.running ?? false;
 
   const executeBulkTask = async <T,>(
+    session: number,
     setRunning: (value: boolean) => void,
     setResult: (value: T | null) => void,
     exec: () => Promise<T>,
   ) => {
+    if (session !== pageSession.current) return;
     setRunning(true);
     setResult(null);
     try {
-      setResult(await exec());
+      const result = await exec();
+      if (session === pageSession.current) setResult(result);
     } finally {
-      setRunning(false);
+      if (session === pageSession.current) setRunning(false);
     }
   };
 
   const runBasicDiagnostics = async () => {
-    if (batchRunning || anyTaskRunning) return;
+    const current = useDiag.getState();
+    if (batchInFlight.current || [current.dnsRun, current.gwRun, current.tcpRun, current.httpsRun,
+      current.v6Run, current.routeRun, current.dnsConsRun, current.natRun, current.gridRun,
+      current.traceRun, current.pingRun].some(Boolean)) return;
+    batchInFlight.current = true;
+    const session = pageSession.current;
     const tasks = [
-      { id: "base", label: "本地与公网信息", run: () => loadBase(true) },
-      { id: "dns", label: "DNS 解析", run: () => executeBulkTask(setDnsRun, setDns, () => api.diagDns()) },
-      { id: "gateway", label: "默认网关", run: () => executeBulkTask(setGwRun, setGw, () => api.diagGateway()) },
-      { id: "tcp", label: "TCP 连接", run: () => executeBulkTask(setTcpRun, setTcp, () => api.diagTcp()) },
-      { id: "https", label: "HTTPS 连接", run: () => executeBulkTask(setHttpsRun, setHttps, () => api.diagHttps()) },
-      { id: "ipv6", label: "IPv6 可用性", run: () => executeBulkTask(setV6Run, setV6, () => api.diagIpv6()) },
-      { id: "grid", label: "服务连通性", run: () => executeBulkTask(setGridRun, setGrid, () => api.diagConnectivityGrid()) },
+      { id: "base", label: "本地与公网信息", run: () => session === pageSession.current ? loadBase(true, true) : Promise.resolve() },
+      { id: "dns", label: "DNS 解析", run: () => executeBulkTask(session, setDnsRun, setDns, () => api.diagDns()) },
+      { id: "gateway", label: "默认网关", run: () => executeBulkTask(session, setGwRun, setGw, () => api.diagGateway()) },
+      { id: "tcp", label: "TCP 连接", run: () => executeBulkTask(session, setTcpRun, setTcp, () => api.diagTcp()) },
+      { id: "https", label: "HTTPS 连接", run: () => executeBulkTask(session, setHttpsRun, setHttps, () => api.diagHttps()) },
+      { id: "ipv6", label: "IPv6 可用性", run: () => executeBulkTask(session, setV6Run, setV6, () => api.diagIpv6()) },
+      { id: "grid", label: "服务连通性", run: () => executeBulkTask(session, setGridRun, setGrid, () => api.diagConnectivityGrid()) },
     ];
     setBatchProgress({ completed: 0, total: tasks.length, results: [], running: true });
     try {
       const results = await runDiagnosticBatch(tasks, 3, (progress) => {
-        setBatchProgress({ ...progress, running: true });
+        if (session === pageSession.current) setBatchProgress({ ...progress, running: true });
       });
+      if (session !== pageSession.current) return;
       const failed = results.filter((result) => !result.ok);
       setBatchProgress({ completed: tasks.length, total: tasks.length, results, running: false });
       if (failed.length) {
@@ -173,8 +195,11 @@ export function DiagnosticsPage() {
         toast("success", `基础诊断完成：${tasks.length} 项已返回结果，具体结论以各卡片为准`);
       }
     } catch (e) {
+      if (session !== pageSession.current) return;
       setBatchProgress((current) => current ? { ...current, running: false } : current);
       toast("error", `基础诊断执行失败：${errMsg(e)}`);
+    } finally {
+      if (session === pageSession.current) batchInFlight.current = false;
     }
   };
 
