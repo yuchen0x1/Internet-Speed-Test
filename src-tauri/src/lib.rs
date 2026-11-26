@@ -125,17 +125,21 @@ mod desktop {
                         }
                         "start-test" => {
                             use crate::engine::EventSink;
-                            let state = app.state::<AppState>();
-                            let settings = tauri::async_runtime::block_on(async {
-                                state.settings.settings.read().await.clone()
+                            // 托盘回调运行在 winit 主线程,不在 tokio runtime 上下文里。
+                            // 引擎的 spawn_test 内部使用 tokio::spawn,必须整体放进异步运行时,
+                            // 否则 release 的 panic=abort 会让应用直接退出。
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let state = app.state::<AppState>();
+                                let settings = state.settings.settings.read().await.clone();
+                                if let Err(e) = state.engine.start(
+                                    EventSink::App(app.clone()),
+                                    settings,
+                                    state.storage.clone(),
+                                ) {
+                                    log::info!("托盘启动测速跳过: {e}");
+                                }
                             });
-                            if let Err(e) = state.engine.start(
-                                EventSink::App(app.clone()),
-                                settings,
-                                state.storage.clone(),
-                            ) {
-                                log::info!("托盘启动测速跳过: {e}");
-                            }
                         }
                         "quit" => {
                             app.exit(0);

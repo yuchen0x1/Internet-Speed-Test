@@ -21,7 +21,7 @@ Windows 桌面版使用 Tauri 的应用数据目录：
 
 设置页还支持用户主动导出和导入版本化 JSON 备份。导入会检查 schema 版本、字段范围、自定义节点 URL 和重复项；校验或保存失败时不会替换当前有效设置。
 
-CLI 在 Windows 上复用 `%APPDATA%\com.netvisionpro.app`。如果没有 `APPDATA` 环境变量，CLI 会回退到系统临时目录下的 `netvision-pro-cli`。
+CLI 默认复用桌面版数据目录：Windows 为 `%APPDATA%\com.netvisionpro.app`，macOS 为 `~/Library/Application Support/com.netvisionpro.app`，Linux 为 `$XDG_DATA_HOME/com.netvisionpro.app` 或 `~/.local/share/com.netvisionpro.app`。可用 `NETVISION_DATA_DIR` 指定其他目录；Windows 上缺少 `APPDATA` 时回退到当前目录下的 `.netvision-pro`。
 
 ## 默认设置
 
@@ -41,6 +41,8 @@ CLI 在 Windows 上复用 `%APPDATA%\com.netvisionpro.app`。如果没有 `APPDA
 | 后台监控 | 开启 | 1 秒采样网卡流量。 |
 | 状态栏流量 | 开启 | 显示当前收发速率。 |
 | 开机自启 | 关闭 | 写入当前用户 Run 项。 |
+| 代理模式 | 自动 | 读取环境变量与 Windows 系统代理；PAC/WPAD 暂不支持时明确报错，不静默直连。 |
+| 自动检查更新 | 开启 | 每 24 小时检查一次 GitHub Releases。 |
 | 计划测速 | 关闭 | 默认间隔 60 分钟。 |
 | 桌面通知 | 开启 | 计划测速及网络断开/恢复通知。 |
 | 阈值告警 | 关闭 | 默认阈值 200 ms，目标 `223.5.5.5`。 |

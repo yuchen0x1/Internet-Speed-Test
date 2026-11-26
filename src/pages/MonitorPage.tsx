@@ -8,7 +8,7 @@ import { LineChart, type Series } from "../components/LineChart";
 import { ActivityBars } from "../components/ActivityBars";
 import { PingDots, pingStats, type PingSample } from "../components/PingDots";
 import { Icon } from "../components/Icon";
-import type { MonitorBucket } from "../types";
+import type { MonitorBucket, MonitorTick } from "../types";
 
 const WINDOWS = [
   { value: 60, label: "1 分钟" },
@@ -105,10 +105,12 @@ export function MonitorPage() {
   }, [win]);
 
   const series: Series[] = useMemo(() => {
-    const cutoff = Date.now() - win * 1000;
-    const data = buffer.filter((t) => t.ts_ms >= cutoff);
-    const rx: [number, number][] = data.map((t) => [(t.ts_ms / 1000) % 1e6, (t.rx_bps * 8) / 1e6]);
-    const tx: [number, number][] = data.map((t) => [(t.ts_ms / 1000) % 1e6, (t.tx_bps * 8) / 1e6]);
+    const windowStart = Date.now() - win * 1000;
+    const data = buffer.filter((t) => t.ts_ms >= windowStart);
+    // 相对窗口起点绘制:避免 epoch 秒数取模每 ~11.6 天回绕一次造成曲线空白。
+    const xOf = (t: MonitorTick) => (t.ts_ms - windowStart) / 1000;
+    const rx: [number, number][] = data.map((t) => [xOf(t), (t.rx_bps * 8) / 1e6]);
+    const tx: [number, number][] = data.map((t) => [xOf(t), (t.tx_bps * 8) / 1e6]);
     return [
       { name: "接收", color: "#22d3ee", data: rx, fill: true },
       { name: "发送", color: "#a78bfa", data: tx, fill: true },

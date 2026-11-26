@@ -24,6 +24,8 @@ export function LineChart(props: {
   series: Series[];
   height?: number;
   yUnit?: string;
+  /** x 轴单位后缀(默认秒;历史趋势按“次”展示) */
+  xUnit?: string;
   /** x 轴窗口(秒);0 表示自适应数据范围 */
   windowSecs?: number;
   avgLine?: boolean;
@@ -32,7 +34,7 @@ export function LineChart(props: {
   emptyText?: string;
 }) {
   const {
-    series, height = 190, yUnit = "", windowSecs = 0, avgLine = false, peakMark = false,
+    series, height = 190, yUnit = "", xUnit = "s", windowSecs = 0, avgLine = false, peakMark = false,
     anomalyThreshold, emptyText = "暂无数据",
   } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -106,7 +108,7 @@ export function LineChart(props: {
     const xStep = (xMax - xMin) / 4;
     for (let i = 0; i <= 4; i++) {
       const xv = xMin + xStep * i;
-      ctx.fillText(`${xv.toFixed(xStep < 1 ? 1 : 0)}s`, padL + (xv - xMin) / (xMax - xMin) * cw, h - 6);
+      ctx.fillText(`${xv.toFixed(xStep < 1 ? 1 : 0)}${xUnit}`, padL + (xv - xMin) / (xMax - xMin) * cw, h - 6);
     }
     // 单位
     ctx.textAlign = "left";
@@ -299,7 +301,7 @@ export function LineChart(props: {
       }
       items.push({ name: s.name, color: s.color, v: best[1] });
     }
-    setHover({ x: mx, y: e.clientY - rect.top, items, label: `${xv.toFixed(1)}s` });
+    setHover({ x: mx, y: e.clientY - rect.top, items, label: `${xv.toFixed(1)}${xUnit}` });
   };
 
   return (

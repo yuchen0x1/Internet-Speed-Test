@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtBytes, fmtBytesPerSec, fmtSpeedMbps, isCancelError, latencyPoints } from "./format";
+import { fmtBytes, fmtBytesPerSec, fmtSpeedMbps, isCancelError, latencyPoints, samplesToSeconds } from "./format";
 
 describe("fmtBytesPerSec", () => {
   it("0 / 负数 / 非有限值统一显示 0 B/s", () => {
@@ -78,5 +78,19 @@ describe("latencyPoints", () => {
 
   it("空样本返回空数组", () => {
     expect(latencyPoints([])).toEqual([]);
+  });
+});
+
+describe("samplesToSeconds", () => {
+  it("毫秒偏移换算为秒,数值保持不变", () => {
+    expect(samplesToSeconds([[0, 0], [200, 101.5], [10000, 940.25]])).toEqual([
+      [0, 0],
+      [0.2, 101.5],
+      [10, 940.25],
+    ]);
+  });
+
+  it("空样本返回空数组", () => {
+    expect(samplesToSeconds([])).toEqual([]);
   });
 });

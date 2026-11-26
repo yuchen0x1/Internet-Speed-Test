@@ -1,5 +1,5 @@
 // 设置中心:外观 / 测速 / 监控 / 网络 / 隐私 / 关于 —— 所有选项真实生效
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMsg, onUpdaterProgress } from "../api";
 import { useApp } from "../store/app";
 import { useServers } from "../store/test";
@@ -22,23 +22,33 @@ export function SettingsPage() {
   const [backupBusy, setBackupBusy] = useState<"export" | "import" | null>(null);
   const [proxyUrlDraft, setProxyUrlDraft] = useState("");
   const [proxyBypassDraft, setProxyBypassDraft] = useState("");
+  const [thresholdDraft, setThresholdDraft] = useState("");
+  const [alertTargetDraft, setAlertTargetDraft] = useState("");
+  const [promPortDraft, setPromPortDraft] = useState("");
   const [proxyStatus, setProxyStatus] = useState<ProxyRuntimeStatus | null>(null);
   // 端点真实状态:设置里的开关只代表意图,绑定可能失败(端口占用)
   const [promStatus, setPromStatus] = useState<PrometheusStatus | null>(null);
+  // 状态查询可能乱序返回(刚改端口/开关后又触发一次),只接受最后一次请求。
+  const promStatusSeq = useRef(0);
+  const proxyStatusSeq = useRef(0);
 
   const refreshPromStatus = useCallback(async () => {
+    const seq = ++promStatusSeq.current;
     try {
-      setPromStatus(await api.prometheusStatus());
+      const status = await api.prometheusStatus();
+      if (seq === promStatusSeq.current) setPromStatus(status);
     } catch {
-      setPromStatus(null); // 状态不可知时退回只显示设置意图
+      if (seq === promStatusSeq.current) setPromStatus(null); // 状态不可知时退回只显示设置意图
     }
   }, []);
 
   const refreshProxyStatus = useCallback(async () => {
+    const seq = ++proxyStatusSeq.current;
     try {
-      setProxyStatus(await api.proxyRuntimeStatus());
+      const status = await api.proxyRuntimeStatus();
+      if (seq === proxyStatusSeq.current) setProxyStatus(status);
     } catch {
-      setProxyStatus(null);
+      if (seq === proxyStatusSeq.current) setProxyStatus(null);
     }
   }, []);
 
@@ -121,7 +131,8 @@ export function SettingsPage() {
       // 继续使用导入前的主题、监控和更新开关。
       useApp.setState({ settings: imported });
       useApp.getState().applyTheme();
-      await loadServers();
+      // 导入可能带来新的自定义节点/节点模式,必须强制刷新而不是命中旧缓存。
+      await loadServers(true);
       await refreshPromStatus();
       await refreshProxyStatus();
       toast("success", "设置已导入并生效");
@@ -144,6 +155,20 @@ export function SettingsPage() {
   useEffect(() => {
     setProxyBypassDraft(settings?.proxy_bypass ?? "");
   }, [settings?.proxy_bypass]);
+
+  // 数字/文本输入使用本地草稿,离开输入框后才落盘:
+  // 避免每敲一个字符就重启 Prometheus 端点,也避免清空输入被当成 0 持久化。
+  useEffect(() => {
+    setThresholdDraft(String(settings?.alert_threshold_ms ?? 200));
+  }, [settings?.alert_threshold_ms]);
+
+  useEffect(() => {
+    setAlertTargetDraft(settings?.alert_target ?? "");
+  }, [settings?.alert_target]);
+
+  useEffect(() => {
+    setPromPortDraft(String(settings?.prometheus_port ?? 9876));
+  }, [settings?.prometheus_port]);
 
   useEffect(() => {
     refreshPromStatus();
@@ -424,11 +449,23 @@ export function SettingsPage() {
                   </div>
                   <div className="row gap8">
                     <input type="number" min={50} max={1000} step={10} className="text-input"
-                           style={{ width: 100 }} value={settings.alert_threshold_ms}
-                           onChange={(e) => upd({ alert_threshold_ms: Number(e.target.value) })}
+                           style={{ width: 100 }} value={thresholdDraft}
+                           onChange={(e) => setThresholdDraft(e.target.value)}
+                           onBlur={() => {
+                             const value = Number(thresholdDraft);
+                             if (Number.isFinite(value) && value >= 50 && value <= 1000) {
+                               if (value !== settings.alert_threshold_ms) void upd({ alert_threshold_ms: value });
+                             } else {
+                               setThresholdDraft(String(settings.alert_threshold_ms));
+                             }
+                           }}
                            aria-label="延迟阈值" />
-                    <input className="text-input" style={{ width: 150 }} value={settings.alert_target}
-                           onChange={(e) => upd({ alert_target: e.target.value })} aria-label="告警目标" />
+                    <input className="text-input" style={{ width: 150 }} value={alertTargetDraft}
+                           onChange={(e) => setAlertTargetDraft(e.target.value)}
+                           onBlur={() => {
+                             const value = alertTargetDraft.trim();
+                             if (value !== settings.alert_target) void upd({ alert_target: value });
+                           }} aria-label="告警目标" />
                   </div>
                 </SettingRow>
               )}
@@ -458,8 +495,16 @@ export function SettingsPage() {
                     <div className="desc">1024-65535,修改后自动重启端点</div>
                   </div>
                   <input type="number" min={1024} max={65535} className="text-input"
-                         style={{ width: 120 }} value={settings.prometheus_port}
-                         onChange={(e) => upd({ prometheus_port: Number(e.target.value) })}
+                         style={{ width: 120 }} value={promPortDraft}
+                         onChange={(e) => setPromPortDraft(e.target.value)}
+                         onBlur={() => {
+                           const value = Number(promPortDraft);
+                           if (Number.isFinite(value) && value >= 1024 && value <= 65535) {
+                             if (value !== settings.prometheus_port) void upd({ prometheus_port: value });
+                           } else {
+                             setPromPortDraft(String(settings.prometheus_port));
+                           }
+                         }}
                          aria-label="导出端口" />
                 </SettingRow>
               )}
@@ -601,7 +646,7 @@ export function SettingsPage() {
             <div>
               <div style={{ fontWeight: 700, fontSize: 15 }}>NetVision Pro</div>
               <div className="faint" style={{ fontSize: 12 }}>
-                版本 {appInfo?.version ?? "1.11.0"} · Windows ({appInfo?.os ?? "windows"})
+                版本 {appInfo?.version ?? "—"} · Windows ({appInfo?.os ?? "windows"})
               </div>
               <div className="faint" style={{ fontSize: 12 }}>
                 专业网络测速与诊断 · 真实测量,拒绝模拟数据

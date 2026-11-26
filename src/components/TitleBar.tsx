@@ -42,6 +42,8 @@ export function TitleBar() {
     net.kind === "wifi" ? "Wi-Fi" : net.kind === "ethernet" ? (locale === "zh-CN" ? "以太网" : "Ethernet") : net.kind === "cellular" ? (locale === "zh-CN" ? "移动网络" : "Mobile") : t("offline");
   const link = net.link_mbps ? `${net.link_mbps >= 1000 ? (net.link_mbps / 1000).toFixed(1) + " Gbps" : net.link_mbps + " Mbps"}` : null;
   const traffic = settings?.show_traffic && net.connected ? tick : null;
+  const rxTraffic = traffic ? fmtSpeedMbps((traffic.rx_bps * 8) / 1e6) : null;
+  const txTraffic = traffic ? fmtSpeedMbps((traffic.tx_bps * 8) / 1e6) : null;
 
   return (
     <header className="titlebar" data-tauri-drag-region role="banner" aria-label={t("windowTitle")}>
@@ -71,9 +73,9 @@ export function TitleBar() {
       {traffic && (
         <div className="net-chip">
           <ActivityBars history={rxHist.current} color="var(--cyan)" height={16} bars={6} />
-          <span className="mono">{fmtSpeedMbps(traffic.rx_bps * 8 / 1e6).value} ↓</span>
+          <span className="mono">{rxTraffic?.value} {rxTraffic?.unit} ↓</span>
           <ActivityBars history={txHist.current} color="var(--purple)" height={16} bars={6} />
-          <span className="mono">{fmtSpeedMbps(traffic.tx_bps * 8 / 1e6).value} ↑</span>
+          <span className="mono">{txTraffic?.value} {txTraffic?.unit} ↑</span>
         </div>
       )}
 

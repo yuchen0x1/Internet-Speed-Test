@@ -144,7 +144,8 @@ interface MonitorStore {
   clear: () => void;
 }
 
-const MAX_POINTS = 3600;
+// 1 小时窗口按前端最小 500ms 采样间隔保留 7200 个点
+const MAX_POINTS = 7200;
 let monitorBinding: Promise<void> | null = null;
 let monitorPauseQueue: Promise<void> = Promise.resolve();
 

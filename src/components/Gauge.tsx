@@ -72,8 +72,14 @@ export function Gauge(props: {
 
   // 弹簧过冲可能短暂低于 0;速度/延迟不存在负值,展示层钳制(不影响均值计算)
   const displayValue = Math.max(0, animated);
-  const valueStr =
-    displayValue >= 1000 ? (displayValue / 1000).toFixed(2) : displayValue >= 100 ? displayValue.toFixed(1) : displayValue.toFixed(2);
+  // ≥1000 Mbps 换算为 Gbps 时必须同时替换单位,否则会出现 "1.20 Mbps" 的 1000 倍误差
+  const scaledToGbps = unit === "Mbps" && displayValue >= 1000;
+  const displayUnit = scaledToGbps ? "Gbps" : unit;
+  const valueStr = scaledToGbps
+    ? (displayValue / 1000).toFixed(2)
+    : displayValue >= 100
+      ? displayValue.toFixed(1)
+      : displayValue.toFixed(2);
   const isIdle = phase === "idle" || (phase === "finished" && !running);
 
   return (
@@ -138,7 +144,7 @@ export function Gauge(props: {
           {error ? "—" : valueStr}
         </text>
         <text x={CX} y={CY + 22} textAnchor="middle" className="gauge-unit">
-          {error ? "错误" : unit}
+          {error ? "错误" : displayUnit}
         </text>
       </svg>
 

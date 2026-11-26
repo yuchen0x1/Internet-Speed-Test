@@ -12,8 +12,6 @@
 - Windows Authenticode 与 updater minisign 是两套机制，当前未配置 Authenticode。
 - CLI 不自动执行远端二进制；替换版本前校验签名并保留原二进制和数据备份。
 
-## 当前依赖例外（2026-11-18）
+## 依赖审计（2026-11-26）
 
-构建工具的 picomatch 存在 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)，上游当前没有已发布修复。Vite/Vitest/fdir/tinyglobby 的 5 个高危审计节点由这一条公告传播而来。它们不包含在 Windows 安装包或 CLI 中；本项目不接受外部 glob 模式，开发服务器仅绑定 loopback。
-
-`npm run security:check` 只允许这条公告影响 **dev-only** 依赖，例外截至 **2026-12-18**；新公告、生产依赖或过期例外均阻断 CI。原始 npm audit 仍会报告高危，不能把例外描述为漏洞已修复。Dependabot 每周检查，上游修复发布后立即取消例外。
+`npm run security:check` 对 `package-lock.json` 执行 `npm audit`，当前没有已知漏洞。CI 对任何新公告均默认阻断；如确需短期例外，必须在本文记录公告编号、影响范围、缓解措施和到期日，并在审计脚本中显式限定，不能把例外描述为漏洞已修复。Dependabot 每周检查依赖更新。

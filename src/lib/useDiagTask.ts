@@ -25,8 +25,11 @@ export function useDiagTask<T>(opts: {
       activeRef.current = false;
       inFlightRef.current = false;
       requestRef.current += 1;
+      // 运行标志存放在全局 store 中;页面卸载后必须复位,否则返回诊断页时
+      // 按钮会永久停在“检测中”。迟到的 finally 会因 request 不匹配而跳过。
+      setRunning(false);
     };
-  }, []);
+  }, [setRunning]);
 
   const run = async () => {
     // React state updates are asynchronous; the ref closes the double-click
@@ -46,7 +49,9 @@ export function useDiagTask<T>(opts: {
         useApp.getState().toast("error", errMsg(e));
       }
     } finally {
-      if (activeRef.current && request === requestRef.current) {
+      // 同一请求的收尾不受页面是否仍挂载影响:清零 in-flight 并复位全局运行标志。
+      // 若期间已开始新请求(序号变化),旧请求不得覆盖新请求的状态。
+      if (request === requestRef.current) {
         inFlightRef.current = false;
         setRunning(false);
       }

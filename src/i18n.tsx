@@ -64,7 +64,7 @@ const messages = {
     offline: "Network disconnected",
     language: "Interface language",
     auto: "Automatic (system)",
-    languageHint: "Automatic mode follows the browser or system language and falls back to English when unavailable.",
+    languageHint: "Automatic mode follows the browser or system language and falls back to Simplified Chinese when unavailable.",
     appContent: "Main content",
     skip: "Skip to main content",
     splash: "Professional network speed and diagnostics",

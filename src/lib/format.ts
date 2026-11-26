@@ -46,3 +46,11 @@ export function isCancelError(e: unknown): boolean {
 export function latencyPoints(samples: [number, number][]): [number, number][] {
   return samples.map((s, i) => [i * 0.35, s[1]] as [number, number]);
 }
+
+/**
+ * 后端速度样本是 [时间偏移 ms, Mbps],LineChart 的 x 轴单位是秒。
+ * 在数据进入图表前统一换算,避免测速完成后曲线仍按毫秒绘制而塌缩到最右侧。
+ */
+export function samplesToSeconds(samples: [number, number][]): [number, number][] {
+  return samples.map(([ms, value]) => [ms / 1000, value] as [number, number]);
+}

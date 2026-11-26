@@ -92,7 +92,7 @@ export default function App() {
     document.title = title ? `${title} · NetVision Pro` : "NetVision Pro";
     const focus = window.setTimeout(() => mainRef.current?.focus(), 0);
     return () => window.clearTimeout(focus);
-  }, [booted, page]);
+  }, [booted, page, t]);
 
   // 与后端引擎对账:托盘启动或窗口重载后,前端可能错过事件而状态停在 idle。
   // 启动完成时对一次,窗口重新获得焦点时再对一次。

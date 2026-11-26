@@ -1,7 +1,8 @@
 // 测速实时状态:由引擎事件驱动的状态机
 
 import { create } from "zustand";
-import { api, onEngineEvent, onServersProbed } from "../api";
+import { api, errMsg, onEngineEvent, onServersProbed } from "../api";
+import { samplesToSeconds } from "../lib/format";
 import { useApp } from "./app";
 import type { Phase, ProbeResult, ServerNodeInfo, TestResult } from "../types";
 
@@ -47,6 +48,7 @@ let elapsedTimer: number | null = null;
 let binding: Promise<void> | null = null;
 let eventRevision = 0;
 let syncSequence = 0;
+let serversLoadSeq = 0;
 
 function stopTimer() {
   if (elapsedTimer != null) {
@@ -151,29 +153,38 @@ export const useTest = create<TestStore>((set, get) => ({
           case "progress":
             set({ progress: ev.percent });
             break;
-          case "finished":
+          case "finished": {
             stopTimer();
+            // 后端样本 x 轴为毫秒偏移,图表统一使用秒;在这里换算一次,
+            // 避免测速完成后曲线仍按毫秒绘制而只显示最右侧一个点。
+            const result = {
+              ...ev.result,
+              down_samples: samplesToSeconds(ev.result.down_samples ?? []),
+              up_samples: samplesToSeconds(ev.result.up_samples ?? []),
+              latency_samples: samplesToSeconds(ev.result.latency_samples ?? []),
+            };
             set({
               running: false,
-              result: ev.result,
-              node: ev.result.server,
+              result,
+              node: result.server,
               phase: "finished",
-              progress: ev.result.status === "completed" ? 100 : 0,
-              message: ev.result.status === "completed" ? "测速完成" : ev.result.status === "cancelled" ? "已取消" : "测速失败",
+              progress: result.status === "completed" ? 100 : 0,
+              message: result.status === "completed" ? "测速完成" : result.status === "cancelled" ? "已取消" : "测速失败",
               liveDown: 0,
               liveUp: 0,
-              downSamples: ev.result.down_samples ?? [],
-              upSamples: ev.result.up_samples ?? [],
-              latencySamples: ev.result.latency_samples ?? [],
+              downSamples: result.down_samples,
+              upSamples: result.up_samples,
+              latencySamples: result.latency_samples,
               loadedDown: [],
               loadedUp: [],
               downloadedMb: 0,
               uploadedMb: 0,
-              elapsedMs: ev.result.duration_ms,
-              error: ev.result.error,
+              elapsedMs: result.duration_ms,
+              error: result.error,
             });
-            if (ev.result.history_save_error) useApp.getState().toast("warn", ev.result.history_save_error);
+            if (result.history_save_error) useApp.getState().toast("warn", result.history_save_error);
             break;
+          }
           case "failed":
             stopTimer();
             set({ running: false, phase: "finished", error: ev.error, progress: 0, result: null });
@@ -258,9 +269,9 @@ export const useTest = create<TestStore>((set, get) => ({
         );
       }
     } else if (!running && cur.running) {
-      // 引擎已结束但没收到 finished 事件:解除 running,保留已有结果,不伪造数值
+      // 引擎已结束但没收到 finished 事件:解除 running,不伪造 0 Mbps 的“完成”结果。
       stopTimer();
-      set({ running: false, phase: "finished", message: "测速已结束" });
+      set({ running: false, phase: "idle", message: "测速已结束，结果请查看历史记录", result: null });
     }
   },
 }));
@@ -286,15 +297,18 @@ export const useServers = create<ServersStore>((set, get) => ({
   loading: false,
   probing: false,
   loaded: false,
-
   load: async (force = false) => {
-    if (get().loading || (get().loaded && !force)) return;
+    if (!force && (get().loading || get().loaded)) return;
+    // 强制刷新允许与在途请求并发,只接受最后一次请求的结果。
+    const seq = ++serversLoadSeq;
     set({ loading: true });
     try {
       const nodes = await api.serversList();
-      set({ nodes, probeErrors: {}, loaded: true });
+      if (seq === serversLoadSeq) set({ nodes, probeErrors: {}, loaded: true });
+    } catch (e) {
+      if (seq === serversLoadSeq) useApp.getState().toast("error", `节点列表加载失败:${errMsg(e)}`);
     } finally {
-      set({ loading: false });
+      if (seq === serversLoadSeq) set({ loading: false });
     }
   },
 

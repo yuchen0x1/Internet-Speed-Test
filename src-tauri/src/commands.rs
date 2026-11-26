@@ -132,6 +132,11 @@ pub async fn set_settings(
     s.refresh_interval_ms = s.refresh_interval_ms.clamp(200, 5000);
     s.auto_test_interval_minutes = s.auto_test_interval_minutes.clamp(15, 1440);
     s.update_check_interval_hours = s.update_check_interval_hours.clamp(6, 168);
+    // 与导入路径保持同一组边界:避免旧前端/IPC 调用写入 0ms 告警阈值、
+    // 特权端口或过短的历史保留期。
+    s.alert_threshold_ms = s.alert_threshold_ms.clamp(50, 1000);
+    s.prometheus_port = s.prometheus_port.clamp(1024, 65535);
+    s.retention_days = normalize_retention_days(s.retention_days);
     if !["dark", "light", "system"].contains(&s.theme.as_str()) {
         s.theme = "light".into();
     }
@@ -187,6 +192,18 @@ pub async fn set_settings(
     Ok(s)
 }
 
+/// 历史保留期只接受 0(永久)/30/90/180/365 天;其他值按既有导入规则归入允许档位。
+fn normalize_retention_days(value: u32) -> u32 {
+    match value {
+        0 | 30 | 90 | 180 | 365 => value,
+        value if value < 30 => 30,
+        value if value < 90 => 90,
+        value if value < 180 => 180,
+        value if value < 365 => 180,
+        _ => 365,
+    }
+}
+
 fn normalize_imported_settings(mut s: AppSettings) -> Result<AppSettings, String> {
     // Keep the same bounds as the regular settings command so a hand-edited
     // backup cannot create an unbounded worker or refresh loop.
@@ -199,14 +216,7 @@ fn normalize_imported_settings(mut s: AppSettings) -> Result<AppSettings, String
     s.update_check_interval_hours = s.update_check_interval_hours.clamp(6, 168);
     s.alert_threshold_ms = s.alert_threshold_ms.clamp(50, 1000);
     s.prometheus_port = s.prometheus_port.clamp(1024, 65535);
-    s.retention_days = match s.retention_days {
-        0 | 30 | 90 | 180 | 365 => s.retention_days,
-        value if value < 30 => 30,
-        value if value < 90 => 90,
-        value if value < 180 => 180,
-        value if value < 365 => 180,
-        _ => 365,
-    };
+    s.retention_days = normalize_retention_days(s.retention_days);
     if !["dark", "light", "system"].contains(&s.theme.as_str()) {
         s.theme = "light".into();
     }
@@ -1879,6 +1889,17 @@ mod tests {
         assert!(UpdateInstallGuard::acquire().is_err());
         drop(guard);
         assert!(UpdateInstallGuard::acquire().is_ok());
+    }
+
+    #[test]
+    fn retention_days_only_accepts_fixed_presets() {
+        assert_eq!(normalize_retention_days(0), 0);
+        assert_eq!(normalize_retention_days(30), 30);
+        assert_eq!(normalize_retention_days(31), 90);
+        assert_eq!(normalize_retention_days(90), 90);
+        assert_eq!(normalize_retention_days(180), 180);
+        assert_eq!(normalize_retention_days(365), 365);
+        assert_eq!(normalize_retention_days(u32::MAX), 365);
     }
 
     #[test]
