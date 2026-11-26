@@ -4,7 +4,7 @@ import { api } from "../api";
 import { useApp } from "../store/app";
 import { useTest } from "../store/test";
 import { useHistoryUi } from "../store/ui";
-import { isCancelError, latencyPoints } from "../lib/format";
+import { isCancelError, latencyPoints, samplesToSeconds } from "../lib/format";
 import { historyDateRange, recentCompleted } from "../lib/history";
 import { LineChart, type Series } from "../components/LineChart";
 import { HistoryHeatmap } from "../components/HistoryHeatmap";
@@ -43,6 +43,7 @@ export function HistoryPage() {
   const [hasMore, setHasMore] = useState(false);
   const nextCursor = useRef<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<HistoryRow | null>(null);
   const [detail, setDetail] = useState<TestResult | null>(null);
   const [queryDraft, setQueryDraft] = useState(query);
   // 请求序号:筛选/排序变更后,慢响应若已过期则丢弃,避免覆盖新结果
@@ -212,16 +213,6 @@ export function HistoryPage() {
       if (!isCancelError(e)) toast("error", `报告生成失败:${String(e)}`);
     }
   };
-  const doDelete = async (id: number) => {
-    try {
-      await api.historyDelete(id);
-      setSelected(selected.filter((x) => x !== id));
-      load();
-    } catch (e) {
-      toast("error", String(e));
-    }
-  };
-
   return (
     <div>
       <div className="page-head">
@@ -379,7 +370,7 @@ export function HistoryPage() {
       {trendData.n >= 2 && (
         <div className="card pad mb16">
           <div className="chart-title">已加载记录 · 速度趋势(最近 {trendData.n} 次成功测试，时间从左向右)</div>
-          <LineChart series={trendSeries} yUnit="Mbps" avgLine height={180} emptyText="暂无足够数据" />
+          <LineChart series={trendSeries} yUnit="Mbps" xUnit="次" avgLine height={180} emptyText="暂无足够数据" />
         </div>
       )}
 
@@ -460,7 +451,7 @@ export function HistoryPage() {
                     <div className="row gap4">
                       <button className="btn ghost sm" title="详情回放" onClick={() => openDetail(r.id)}><Icon name="eye" size={13} /></button>
                       <button className="btn ghost sm" title="生成报告" onClick={() => doReport(r.id)}><Icon name="export" size={13} /></button>
-                      <button className="btn ghost sm" title="删除" onClick={() => doDelete(r.id)}><Icon name="trash" size={13} /></button>
+                      <button className="btn ghost sm" title="删除" onClick={() => setConfirmDelete(r)}><Icon name="trash" size={13} /></button>
                     </div>
                   </td>
                 </tr>
@@ -495,6 +486,25 @@ export function HistoryPage() {
         />
       )}
 
+      {confirmDelete && (
+        <ConfirmModal
+          title="删除测速记录"
+          text={`将永久删除 ${confirmDelete.created_at} 的这条测速记录,该操作不可恢复。`}
+          danger
+          onOk={async () => {
+            try {
+              await api.historyDelete(confirmDelete.id);
+              setSelected(selected.filter((x) => x !== confirmDelete.id));
+              toast("success", "记录已删除");
+              load();
+            } catch (e) {
+              toast("error", String(e));
+            }
+          }}
+          onClose={() => setConfirmDelete(null)}
+        />
+      )}
+
       {detail && <DetailModal detail={detail} onClose={() => setDetail(null)} />}
     </div>
   );
@@ -504,11 +514,11 @@ export function HistoryPage() {
 function DetailModal({ detail, onClose }: { detail: TestResult; onClose: () => void }) {
   // series 引用稳定:仅当详情数据更新时重建
   const seriesDown = useMemo<Series[]>(
-    () => [{ name: "下载", color: "#22d3ee", data: detail.down_samples, fill: true }],
+    () => [{ name: "下载", color: "#22d3ee", data: samplesToSeconds(detail.down_samples), fill: true }],
     [detail],
   );
   const seriesUp = useMemo<Series[]>(
-    () => [{ name: "上传", color: "#a78bfa", data: detail.up_samples, fill: true }],
+    () => [{ name: "上传", color: "#a78bfa", data: samplesToSeconds(detail.up_samples), fill: true }],
     [detail],
   );
   const seriesLat = useMemo<Series[]>(

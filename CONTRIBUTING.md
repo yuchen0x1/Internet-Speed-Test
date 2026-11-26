@@ -38,7 +38,7 @@ npm run build
 修改 Rust：
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 

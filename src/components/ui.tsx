@@ -27,7 +27,10 @@ export function Modal(props: {
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        e.stopPropagation();
+        // 捕获阶段拦截并阻止同一事件继续分发:否则 App 的全局快捷键也会
+        // 收到 Escape,在测速进行中关弹窗会顺带取消测速。
+        e.preventDefault();
+        e.stopImmediatePropagation();
         props.onClose();
         return;
       }
@@ -51,9 +54,9 @@ export function Modal(props: {
         lastItem.focus();
       }
     };
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       restoreTo?.focus?.();
     };
     // props.onClose 变化不应重装(会导致焦点反复重置)

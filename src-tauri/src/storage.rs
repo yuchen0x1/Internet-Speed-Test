@@ -325,11 +325,18 @@ impl Storage {
         }
         conn.pragma_update(None, "secure_delete", "ON")
             .map_err(|e| e.to_string())?;
-        let sanitized = sanitize_legacy_ndt7_details(&conn)?;
-        if sanitized > 0 {
-            conn.execute_batch("VACUUM;").map_err(|e| e.to_string())?;
-            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-                .map_err(|e| e.to_string())?;
+        // 历史数据清理与压缩是维护动作,失败不应阻止应用启动(磁盘满/数据库被短暂占用)。
+        match sanitize_legacy_ndt7_details(&conn) {
+            Ok(sanitized) if sanitized > 0 => {
+                if let Err(e) = conn.execute_batch("VACUUM;") {
+                    log::warn!("清理旧 NDT7 数据后 VACUUM 失败(忽略): {e}");
+                }
+                if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+                    log::warn!("清理旧 NDT7 数据后 WAL checkpoint 失败(忽略): {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("旧 NDT7 数据清理失败(忽略,继续启动): {e}"),
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

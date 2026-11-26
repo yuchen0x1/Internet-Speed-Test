@@ -6,7 +6,7 @@ import { useDiag } from "../store/diag";
 import { useDiagTask } from "../lib/useDiagTask";
 import { runDiagnosticBatch, type DiagnosticBatchProgress } from "../lib/diagnostics";
 import { Icon, type IconName } from "../components/Icon";
-import { Modal } from "../components/ui";
+import { Modal, ConfirmModal } from "../components/ui";
 import type { DiagRunRow, IfaceInfo, WifiDetails } from "../types";
 
 type Status = "ok" | "err" | "warn" | "unknown" | "running";
@@ -168,9 +168,9 @@ export function DiagnosticsPage() {
       const failed = results.filter((result) => !result.ok);
       setBatchProgress({ completed: tasks.length, total: tasks.length, results, running: false });
       if (failed.length) {
-        toast("warn", `基础诊断完成：${tasks.length - failed.length} 项成功，${failed.length} 项失败`);
+        toast("warn", `基础诊断完成：${tasks.length - failed.length} 项返回结果，${failed.length} 项调用失败`);
       } else {
-        toast("success", `基础诊断完成：${tasks.length} 项检查通过`);
+        toast("success", `基础诊断完成：${tasks.length} 项已返回结果，具体结论以各卡片为准`);
       }
     } catch (e) {
       setBatchProgress((current) => current ? { ...current, running: false } : current);
@@ -267,7 +267,10 @@ export function DiagnosticsPage() {
               <Icon name="eye" size={26} />
               <span>公网 IP 显示已在隐私设置中关闭</span>
               <span style={{ fontSize: 11.5 }}>开启后才会向测速服务查询 IP 与运营商信息</span>
-              <button className="btn sm mt8" onClick={() => useApp.getState().updateSettings({ show_public_ip: true })}>开启显示</button>
+              <button className="btn sm mt8" onClick={async () => {
+                const ok = await useApp.getState().updateSettings({ show_public_ip: true });
+                if (ok) await loadBase(true);
+              }}>开启显示</button>
             </div>
           ) : (
             <>
@@ -466,6 +469,7 @@ function DiagHistoryPanel() {
   const [kind, setKind] = React.useState("");
   const [open, setOpen] = React.useState(false);
   const [detail, setDetail] = React.useState<{ row: DiagRunRow; json: string } | null>(null);
+  const [confirmClear, setConfirmClear] = React.useState(false);
   const loadSeq = React.useRef(0);
   const toast = useApp((s) => s.toast);
   const saveEnabled = useApp((s) => s.settings?.save_diag_history ?? false);
@@ -498,15 +502,9 @@ function DiagHistoryPanel() {
           <Icon name={open ? "close" : "history"} size={13} /> {open ? "收起" : "查看记录"}
         </button>
         {open && rows && rows.length > 0 && (
-          <button className="btn sm danger" onClick={async () => {
-            try {
-              const n = await api.diagHistoryClear();
-              toast("success", `已清除 ${n} 条诊断记录`);
-              load();
-            } catch (e) {
-              toast("error", String(e));
-            }
-          }}><Icon name="trash" size={13} /> 清空</button>
+          <button className="btn sm danger" onClick={() => setConfirmClear(true)}>
+            <Icon name="trash" size={13} /> 清空
+          </button>
         )}
       </div>
 
@@ -579,6 +577,24 @@ function DiagHistoryPanel() {
             whiteSpace: "pre-wrap", wordBreak: "break-all",
           }}>{prettyJson(detail.json)}</pre>
         </Modal>
+      )}
+
+      {confirmClear && (
+        <ConfirmModal
+          title="清空诊断历史"
+          text="将永久删除全部诊断历史记录(不受当前类型筛选影响),该操作不可恢复。"
+          danger
+          onOk={async () => {
+            try {
+              const n = await api.diagHistoryClear();
+              toast("success", `已清除 ${n} 条诊断记录`);
+              load();
+            } catch (e) {
+              toast("error", String(e));
+            }
+          }}
+          onClose={() => setConfirmClear(false)}
+        />
       )}
     </div>
   );

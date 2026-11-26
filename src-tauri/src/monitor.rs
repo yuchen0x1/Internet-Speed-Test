@@ -18,8 +18,8 @@ use crate::diagnostics::{current_net_status, NetStatus};
 use crate::settings::AppSettings;
 
 /// 环形缓冲容量上限(样本数)。采样间隔可配(200-5000ms),
-/// 因此按时间裁剪而非单纯按条数,保证窗口语义恒为"最近 1 小时"。
-const BUFFER_CAPACITY: usize = 3600;
+/// 前端最小可选 500ms;7200 条可覆盖 1 小时窗口。按时间裁剪保证窗口语义。
+const BUFFER_CAPACITY: usize = 7200;
 /// 缓冲保留时长
 const BUFFER_WINDOW_MS: u64 = 60 * 60 * 1000;
 /// 网络状态复检间隔(时间节流,与采样间隔解耦)
@@ -205,10 +205,13 @@ pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<M
     let h = handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut networks = Networks::new_with_refreshed_list().ok();
+        // sysinfo 的 received()/transmitted() 是“距上次 refresh 的字节数”,
+        // 必须除以实际经过时间才是 B/s;暂停/关闭期间也要 refresh 以重置基线,
+        // 否则恢复后的第一个 tick 会把整段暂停流量当成瞬时速率。
+        let mut last_refresh: Option<std::time::Instant> = None;
         let mut last_status_check = std::time::Instant::now();
         loop {
             // 采样间隔取自设置(200-5000ms):每轮重读,改设置后下一轮即生效。
-            // netdev 的速率按内部实际经过时间计算,间隔变化不会让 bps 失真。
             let interval_ms = {
                 let s = settings.read().await;
                 s.refresh_interval_ms.clamp(200, 5000) as u64
@@ -217,14 +220,27 @@ pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<M
             let enabled = h.enabled.load(Ordering::SeqCst);
             let paused = h.paused.load(Ordering::SeqCst);
             if !enabled || paused {
-                // 关闭/暂停时空转,不采样不 emit
+                // 关闭/暂停时不 emit,但仍刷新计数器,避免恢复后出现虚假峰值。
+                if let Some(nets) = networks.as_mut() {
+                    nets.refresh(true);
+                    last_refresh = Some(std::time::Instant::now());
+                }
                 continue;
+            }
+            // 首次初始化失败时周期重试,避免一次瞬时错误让监控永久失效。
+            if networks.is_none() {
+                networks = Networks::new_with_refreshed_list().ok();
             }
             let Some(nets) = networks.as_mut() else {
                 continue;
             };
-            // 两次 refresh 之间计算增量速率
+            let refresh_at = std::time::Instant::now();
             nets.refresh(true);
+            let elapsed_secs = last_refresh
+                .map(|prev| refresh_at.duration_since(prev).as_secs_f64())
+                .filter(|secs| *secs > 0.0)
+                .unwrap_or(interval_ms as f64 / 1000.0);
+            last_refresh = Some(refresh_at);
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -238,8 +254,8 @@ pub fn spawn(app: tauri::AppHandle, settings: Arc<RwLock<AppSettings>>) -> Arc<M
                 ifaces: Vec::new(),
             };
             for (name, data) in nets.iter() {
-                let rx_bps = data.received() as f64;
-                let tx_bps = data.transmitted() as f64;
+                let rx_bps = data.received() as f64 / elapsed_secs;
+                let tx_bps = data.transmitted() as f64 / elapsed_secs;
                 let up = rx_bps + tx_bps > 0.0;
                 tick.rx_bps += rx_bps;
                 tick.tx_bps += tx_bps;

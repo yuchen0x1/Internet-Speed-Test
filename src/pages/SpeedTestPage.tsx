@@ -138,6 +138,8 @@ export function SpeedTestPage() {
   const stepIdx = STEPS.findIndex((s) => s.key === t.phase);
   const dl = fmtSpeedMbps(t.result?.download_mbps ?? t.liveDown);
   const ul = fmtSpeedMbps(t.result?.upload_mbps ?? t.liveUp);
+  const dlPeak = t.result ? fmtSpeedMbps(t.result.download_peak_mbps) : null;
+  const ulPeak = t.result?.upload_peak_mbps != null ? fmtSpeedMbps(t.result.upload_peak_mbps) : null;
   // series 引用稳定:仅当对应样本数组更新时重建,避免 LineChart 无谓重绘
   const downSeries = useMemo<Series[]>(
     () => [{ name: "下载速度", color: "#22d3ee", data: t.downSamples, fill: true }],
@@ -267,17 +269,17 @@ export function SpeedTestPage() {
         <div className="stat-stack">
           <div className="card pad hoverable stat-card">
             <div className="stat-head"><Icon name="download" size={17} /> 下载速度</div>
-            <div className="stat-value mono">{t.running && t.phase === "download" ? dl.value : t.result?.download_mbps ? dl.value : t.running ? "--" : "--"}</div>
-            <div className="stat-unit">{t.running && t.phase === "download" ? dl.unit : "Mbps"}{t.result ? ` · 峰值 ${t.result.download_peak_mbps.toFixed(1)}` : ""}</div>
+            <div className="stat-value mono">{t.result ? dl.value : t.running && t.phase === "download" ? dl.value : "--"}</div>
+            <div className="stat-unit">{dl.unit}{dlPeak ? ` · 峰值 ${dlPeak.value} ${dlPeak.unit}` : ""}</div>
           </div>
           <div className="card pad hoverable stat-card purple-accent">
             <div className="stat-head"><Icon name="upload" size={17} /> 上传速度</div>
             <div className="stat-value mono">{t.result?.upload_mbps != null ? ul.value : t.running && t.phase === "upload" ? ul.value : "--"}</div>
-            <div className="stat-unit">{t.result?.upload_peak_mbps ? `峰值 ${t.result.upload_peak_mbps.toFixed(1)} Mbps` : ul.unit}</div>
+            <div className="stat-unit">{ulPeak ? `峰值 ${ulPeak.value} ${ulPeak.unit}` : ul.unit}</div>
           </div>
           <div className="card pad hoverable stat-card">
             <div className="stat-head"><Icon name="target" size={17} /> 网络延迟</div>
-            <div className="stat-value mono">{t.result?.idle_ping_ms ? t.result.idle_ping_ms.toFixed(1) : t.latencySamples.length ? t.latencySamples[t.latencySamples.length - 1][1].toFixed(1) : "--"}</div>
+            <div className="stat-value mono">{t.result ? t.result.idle_ping_ms.toFixed(1) : t.latencySamples.length ? t.latencySamples[t.latencySamples.length - 1][1].toFixed(1) : "--"}</div>
             <div className="stat-unit">ms{t.result ? ` · 抖动 ${t.result.jitter_ms.toFixed(1)} ms` : ""}</div>
           </div>
         </div>
