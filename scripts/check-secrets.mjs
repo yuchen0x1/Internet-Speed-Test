@@ -22,19 +22,20 @@ if (!onPath.error && onPath.status === 0) {
   const archive = path.join(downloadDirectory, toolArchive);
   if (!fs.existsSync(executable)) {
     const checksumFile = path.join(downloadDirectory, checksumsName);
-    const runGh = (pattern) => {
-      const result = spawnSync('gh', ['release', 'download', `v${toolVersion}`,
-        '--repo', 'gitleaks/gitleaks', '--pattern', pattern, '--clobber', '--dir', downloadDirectory],
-        { encoding: 'utf8', windowsHide: true, maxBuffer: 1_000_000 });
+    const download = (pattern, destination) => {
+      const result = spawnSync('curl.exe', ['--fail', '--location', '--silent', '--show-error',
+        '--retry', '3', '--output', destination,
+        `https://github.com/gitleaks/gitleaks/releases/download/v${toolVersion}/${pattern}`],
+      { encoding: 'utf8', windowsHide: true, maxBuffer: 1_000_000 });
       assert.ok(!result.error && result.status === 0,
         `Unable to download ${pattern}: ${result.error?.message ?? result.stderr}`);
     };
-    if (!fs.existsSync(checksumFile)) runGh(checksumsName);
+    if (!fs.existsSync(checksumFile)) download(checksumsName, checksumFile);
     const digestLine = fs.readFileSync(checksumFile, 'utf8').split(/\r?\n/)
       .find((line) => line.endsWith(toolArchive));
     assert.ok(digestLine, `Missing checksum for ${toolArchive}`);
     const expectedDigest = digestLine.split(/\s+/)[0].toLowerCase();
-    if (!fs.existsSync(archive)) runGh(toolArchive);
+    if (!fs.existsSync(archive)) download(toolArchive, archive);
     const actualDigest = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
     assert.equal(actualDigest, expectedDigest, 'Downloaded gitleaks archive failed SHA-256 verification');
     const expand = spawnSync('tar.exe', ['-xf', archive, '-C', downloadDirectory],

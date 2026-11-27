@@ -8,6 +8,35 @@ permissions:
   contents: read
 
 jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 凭据历史与工作树扫描
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=8.30.1
+          ARCHIVE="gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/${ARCHIVE}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/${ARCHIVE}"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/gitleaks-checksums.txt" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_checksums.txt"
+          cd /tmp
+          grep "${ARCHIVE}" gitleaks-checksums.txt | sha256sum --check --strict
+          tar -xzf "${ARCHIVE}" gitleaks
+          chmod +x gitleaks
+          cd "${GITHUB_WORKSPACE}"
+          /tmp/gitleaks git --redact=100 --no-banner .
+          /tmp/gitleaks dir --redact=100 --no-banner .
+
   test:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -43,25 +72,6 @@ jobs:
 
       - name: 前端依赖审计
         run: npm run security:check
-
-      - name: 凭据历史扫描
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION=8.30.1
-          curl --fail --location --silent --show-error --retry 3 \
-            --output "/tmp/gitleaks_${VERSION}_linux_x64.tar.gz" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
-          curl --fail --location --silent --show-error --retry 3 \
-            --output "/tmp/gitleaks-checksums.txt" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_checksums.txt"
-          cd /tmp
-          grep "gitleaks_${VERSION}_linux_x64.tar.gz" gitleaks-checksums.txt | sha256sum --check --strict
-          tar -xzf "gitleaks_${VERSION}_linux_x64.tar.gz" gitleaks
-          chmod +x gitleaks
-          cd "${GITHUB_WORKSPACE}"
-          /tmp/gitleaks git --redact=100 --no-banner .
-          /tmp/gitleaks dir --redact=100 --no-banner .
 
       - name: Rust 依赖审计
         uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
