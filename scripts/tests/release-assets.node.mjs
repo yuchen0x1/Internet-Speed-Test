@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import test from 'node:test';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { assertCompatibleAsset, missingReleaseAssets } from '../upload-missing-release-assets.mjs';
+
+const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const bytes = (text) => Buffer.from(text);
 const hash = (text) => createHash('sha256').update(text).digest('hex');
@@ -53,4 +58,9 @@ test('checksums verify every generated entry and allow extra historical CLI entr
   assert.throws(() => assertCompatibleAsset('SHA256SUMS.txt', local, bytes('invalid')), /Refusing to mix/);
   assert.throws(() => assertCompatibleAsset('app.exe.sha256', local,
     bytes(`${hash('installer')}  app.exe\n${hash('different installer')}  app.exe\n`)), /Refusing to mix/);
+});
+
+test('historical asset repair uses installer-only verification after upload', () => {
+  const workflow = fs.readFileSync(path.join(repositoryRoot, '.github/workflows/repair-release-assets.yml'), 'utf8');
+  assert.match(workflow, /verify-public-release\.mjs --published "\$RELEASE_TAG" --installer-only/);
 });

@@ -30,6 +30,7 @@ jobs:
       - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with: { workspaces: src-tauri, key: headless }
       - run: node scripts/check-version.mjs
+      - run: node scripts/check-dependency-patches.mjs
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features

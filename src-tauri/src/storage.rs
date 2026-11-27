@@ -84,9 +84,9 @@ fn history_bounds(
             return Ok(None);
         };
         if value.len() == 10 {
-            let date = chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            let date = jiff::civil::Date::strptime("%Y-%m-%d", &value)
                 .map_err(|_| "无效日期，请使用 YYYY-MM-DD".to_string())?;
-            if date.format("%Y-%m-%d").to_string() != value {
+            if date.strftime("%Y-%m-%d").to_string() != value {
                 return Err("无效日期，请使用 YYYY-MM-DD".into());
             }
             return Ok(Some(format!(
@@ -98,7 +98,7 @@ fn history_bounds(
                 }
             )));
         }
-        chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+        crate::time_support::parse_history_datetime(&value)
             .map_err(|_| "无效日期时间，请使用 YYYY-MM-DD HH:MM:SS".to_string())?;
         Ok(Some(value))
     }
@@ -496,10 +496,7 @@ impl Storage {
         if days == 0 {
             return Ok(0); // 0 = 永久保留
         }
-        let cutoff = chrono::Local::now()
-            .checked_sub_signed(chrono::Duration::days(days as i64))
-            .ok_or_else(|| "历史保留期超出支持的日期范围".to_string())?;
-        let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
+        let cutoff_str = crate::time_support::retention_cutoff(&jiff::ZonedDateTime::now(), days)?;
         let n = crate::safe_lock::lock(&self.conn)
             .execute("DELETE FROM history WHERE created_at < ?1", [cutoff_str])
             .map_err(|e| e.to_string())?;
@@ -773,11 +770,7 @@ impl Storage {
         if fav {
             conn.execute(
                 "INSERT OR REPLACE INTO favorite_servers (url, name, added_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![
-                    url,
-                    name,
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
-                ],
+                rusqlite::params![url, name, crate::time_support::local_now()],
             )
             .map_err(|e| e.to_string())?;
         } else {

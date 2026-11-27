@@ -2,9 +2,25 @@
 
 以已发布标签、提交差异和历史开发记录为依据，按版本倒序整理。公开版本日期按 GitHub 正式发布时间换算为北京时间；早期日期仅表示开发记录日期。
 
-`v1.15.7` 为缺陷修复版本；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.7) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
+`v1.15.8` 为安全与发布验收修复版本；发布及资产状态以 [GitHub Release](https://github.com/yuchen0x1/Internet-Speed-Test/releases/tag/v1.15.8) 为准。`v1.0.0`～`v1.7.0` 仅有开发记录，没有对应公开标签或独立 Release。下载前请核对 [GitHub Releases](https://github.com/yuchen0x1/Internet-Speed-Test/releases) 中的实际资产；`v1.15.0` 的安装包和更新资源已于 2026-11-24 补回，详见下方核验记录。
 
 本文件是完整日志的维护入口；根目录 `CHANGELOG.md` 为同步镜像。原始开发验证与旧日志可从 [固定历史提交](https://github.com/yuchen0x1/Internet-Speed-Test/tree/0709a06/docs/releases) 和 [早期测试记录](https://github.com/yuchen0x1/Internet-Speed-Test/blob/840e4bf/TEST_REPORT.md) 查阅，不在当前目录重复保留。历史测试结论不代表本轮重新执行。
+
+<a id="v1-15-8"></a>
+
+## v1.15.8 (2026-11-27)
+
+本版处理上一版遗留的依赖安全问题和发布验收缺口，保留产品标识、更新地址、公钥、设置与历史数据库格式。
+
+- 将停止维护的 chrono 替换为 Jiff；保持旧历史时间格式、RFC3339 时区信息和固定 24 小时保留期，增加夏令时重复/缺失时间及异常保留期回归测试。
+- 回移 glib 官方对 VariantStrIter 可变输出指针的修复，保留真实上游版本、许可证和来源记录；新增优化构建下的迭代器回归测试，不靠修改版本号或忽略公告规避问题。
+- 将 GTK 宏库和 Linux 通知/单实例插件迁移到受维护的错误处理与 D-Bus 依赖；移除未启用的 serde_with chrono 集成，阻止它重新进入锁文件。第三方补丁及移除条件见 [维护说明](../../vendor/README.md)。
+- 增加本地补丁完整性与锁文件来源检查，拦截补丁回退、停用补丁和已移除依赖回流；Rust 审计改为同时阻断维护性和 unsound 告警。
+- 发布前验证签名与校验和；发布后重新下载全部 16 份正式资产，验证五个二进制、签名版本/文件名及固定更新入口。历史版本补传不会要求最新入口倒退。
+- 增加 JavaScript/TypeScript 与 Rust CodeQL 扫描，以及 Linux 桌面依赖编译和补丁回归工作流；扫描与构建结果以该版本实际 CI 为准。
+- 增加凭据扫描门禁，使用校验过 SHA-256 的 Gitleaks 扫描完整 Git 历史与当前目录；报告默认完全脱敏，发布和资产修复流程同样执行。
+- 验证：本地前端 92 项测试、发布资产与补丁回归 53 项测试、类型检查、生产构建、IPC 契约与 npm 审计通过。Windows CI 的 Rust 137 项测试通过，4 项真实网络测试按标记跳过；严格 Clippy 及四平台 CLI 检查通过。Linux 桌面依赖真实编译、GLib 优化回归、宏诊断和通知测试、真实 D-Bus 生命周期测试通过；JavaScript/TypeScript 与 Rust CodeQL 扫描通过。60 个提交的 Git 历史和当前目录凭据扫描未发现凭据。本机缺少 MSVC 链接器，Rust 编译结论依据 CI；未执行真实桌面覆盖升级或公网多地区测速。
+- 更新兼容：v1.11.0 起可手动检查更新，v1.12.0 起按自动检查开关和间隔提示，需能访问 GitHub；更早未集成更新器的版本需先手动安装。配置和历史记录保留。
 
 <a id="v1-15-7"></a>
 

@@ -1,7 +1,7 @@
 {
   "name": "netvision-pro",
   "private": true,
-  "version": "1.15.7",
+  "version": "1.15.8",
   "description": "NetVision Pro - 专业级桌面网络测速与诊断软件",
   "type": "module",
   "scripts": {

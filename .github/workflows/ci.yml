@@ -8,6 +8,35 @@ permissions:
   contents: read
 
 jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 凭据历史与工作树扫描
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=8.30.1
+          ARCHIVE="gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/${ARCHIVE}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/${ARCHIVE}"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/gitleaks-checksums.txt" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_checksums.txt"
+          cd /tmp
+          grep "${ARCHIVE}" gitleaks-checksums.txt | sha256sum --check --strict
+          tar -xzf "${ARCHIVE}" gitleaks
+          chmod +x gitleaks
+          cd "${GITHUB_WORKSPACE}"
+          /tmp/gitleaks git --redact=100 --no-banner .
+          /tmp/gitleaks dir --redact=100 --no-banner .
+
   test:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -50,10 +79,10 @@ jobs:
           tool: cargo-audit
 
       - name: 检查 Rust 漏洞
-        # 已知漏洞阻断；维护性/unsound 告警继续完整输出并复核构建范围。
-        # chrono 是直接运行时依赖，其余当前告警来自未发布的 Linux 桌面依赖树。
-        # 不通过 ignore 隐藏告警；各公告和残余风险见 SECURITY.md。
-        run: cargo audit --file src-tauri/Cargo.lock
+        run: |
+          node scripts/check-dependency-patches.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo audit --deny warnings --file src-tauri/Cargo.lock
 
       - name: Rust 格式检查
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
@@ -68,7 +97,7 @@ jobs:
         run: npm run test
 
       - name: 发布资产一致性回归测试
-        run: node --test scripts/tests/release-assets.node.mjs
+        run: node --test scripts/tests/release-assets.node.mjs scripts/tests/verify-public-release.node.mjs scripts/tests/dependency-patches.node.mjs
 
       - name: 前端生产构建
         run: npm run build
