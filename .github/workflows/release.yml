@@ -58,6 +58,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run security:check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-secrets.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-dependency-patches.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo audit --deny warnings --file src-tauri/Cargo.lock

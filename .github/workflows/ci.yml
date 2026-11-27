@@ -44,6 +44,25 @@ jobs:
       - name: 前端依赖审计
         run: npm run security:check
 
+      - name: 凭据历史扫描
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=8.30.1
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/gitleaks-checksums.txt" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_checksums.txt"
+          cd /tmp
+          grep "gitleaks_${VERSION}_linux_x64.tar.gz" gitleaks-checksums.txt | sha256sum --check --strict
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+          cd "${GITHUB_WORKSPACE}"
+          /tmp/gitleaks git --redact=100 --no-banner .
+          /tmp/gitleaks dir --redact=100 --no-banner .
+
       - name: Rust 依赖审计
         uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
