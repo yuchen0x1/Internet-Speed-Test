@@ -166,6 +166,14 @@ test('historical release repair verifies assets but does not require latest to p
   assert.equal(result.assetCount, 16);
 });
 
+test('historical installer-only repair verifies the four restored assets', async (t) => {
+  const sample = fixture(t, { installerOnly: true });
+  const { options } = publishedOptions(sample, { latestTag: 'v2.0.0', fetchImpl: async () => assert.fail('Must not fetch latest for historical release') });
+  const result = await verifyPublishedRelease(tag, { ...options, installerOnly: true });
+  assert.equal(result.latestEndpoint, 'skipped-historical-release');
+  assert.equal(result.assetCount, 4);
+});
+
 test('a newly published version cannot be mistaken for historical when latest still points to an older version', async (t) => {
   const sample = fixture(t);
   const { options, downloads } = publishedOptions(sample, { latestTag: 'v1.2.2',

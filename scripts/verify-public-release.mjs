@@ -164,7 +164,7 @@ function compareStableTags(left, right) {
 
 export async function verifyPublishedRelease(tag, {
   config, runGh = runGitHub, fetchImpl = fetchPublicManifest, sleep = delay,
-  latestAttempts = 4, retryDelayMs = 5_000,
+  latestAttempts = 4, retryDelayMs = 5_000, installerOnly = false,
 }) {
   assert.match(tag, /^v\d+\.\d+\.\d+$/, 'A stable release tag is required');
   assert.ok(Number.isInteger(latestAttempts) && latestAttempts >= 1 && latestAttempts <= 6);
@@ -174,12 +174,12 @@ export async function verifyPublishedRelease(tag, {
   assert.equal(release.tagName, tag);
   assert.equal(release.isDraft, false, 'Release must be published');
   assert.equal(release.isPrerelease, false, 'Release must be stable');
-  const assets = expectedReleaseAssets(context.version);
+  const assets = expectedReleaseAssets(context.version, { installerOnly });
   assert.deepEqual(release.assets.map((asset) => asset.name).sort(), [...assets.names].sort(), 'Published release asset set');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'netvision-published-release-'));
   try {
     runGh(['release', 'download', tag, ...repoArgs, '--dir', temporary]);
-    const result = verifyReleaseDirectory(temporary, { config, expectedVersion: tag });
+    const result = verifyReleaseDirectory(temporary, { config, expectedVersion: tag, installerOnly });
     const signature = fs.readFileSync(path.join(temporary, `${assets.installer}.sig`), 'utf8').trim();
     let lastError;
     for (let attempt = 0; attempt < latestAttempts; attempt++) {
@@ -210,13 +210,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const args = process.argv.slice(2);
   try {
     let result;
-    if (args[0] === '--published' && args.length === 2) {
-      result = await verifyPublishedRelease(args[1], { config });
+    const installerOnlyFlags = args.filter((arg) => arg === '--installer-only').length;
+    assert.ok(installerOnlyFlags <= 1, 'Do not repeat --installer-only');
+    const installerOnly = installerOnlyFlags === 1;
+    const positional = args.filter((arg) => arg !== '--installer-only');
+    if (positional[0] === '--published') {
+      assert.equal(positional.length, 2,
+        'Usage: verify-public-release.mjs [directory] [version] [--installer-only] | --published vX.Y.Z [--installer-only]');
+      result = await verifyPublishedRelease(positional[1], { config, installerOnly });
     } else {
-      const installerOnly = args.includes('--installer-only');
-      const positional = args.filter((arg) => arg !== '--installer-only');
       assert.ok(positional.length <= 2 && positional.every((arg) => !arg.startsWith('--')),
-        'Usage: verify-public-release.mjs [directory] [version] [--installer-only] | --published vX.Y.Z');
+        'Usage: verify-public-release.mjs [directory] [version] [--installer-only] | --published vX.Y.Z [--installer-only]');
       result = verifyReleaseDirectory(path.resolve(positional[0] || 'release-artifacts'), {
         config, expectedVersion: positional[1], installerOnly,
       });

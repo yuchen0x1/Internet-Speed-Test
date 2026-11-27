@@ -151,4 +151,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: node .release-tools/scripts/verify-public-release.mjs --published "$RELEASE_TAG"
+        run: node .release-tools/scripts/verify-public-release.mjs --published "$RELEASE_TAG" --installer-only
