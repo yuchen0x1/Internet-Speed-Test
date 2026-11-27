@@ -49,16 +49,17 @@ const redactedReport = path.join(os.tmpdir(), `netvision-gitleaks-${Date.now()}.
 const runScan = (command) => spawnSync('gitleaks', [...command, '--redact=100', '--no-banner',
   '--report-format', 'json', '--report-path', redactedReport],
   { encoding: 'utf8', windowsHide: true, maxBuffer: 5_000_000, cwd: repositoryRoot });
-let scan = runScan(['git', '.']);
-if (scan.status !== 0 && scan.status !== 1) scan = runScan(['dir', '.']);
+const historyScan = runScan(['git', '.']);
+const directoryScan = runScan(['dir', '.']);
+const scan = historyScan.status === 1 || directoryScan.status === 1
+  ? { status: 1 } : { status: historyScan.status === 0 && directoryScan.status === 0 ? 0 : 2 };
 fs.rmSync(redactedReport, { force: true });
 if (scan.status === 0) {
   console.log('Gitleaks credential scan passed; no credentials found.');
   process.exit(0);
 }
 if (scan.status === 1) {
-  console.error('Gitleaks found possible credentials in Git history. Details are redacted; review locally before proceeding.');
+  console.error('Gitleaks found possible credentials. Details are redacted; review locally before proceeding.');
   process.exit(1);
 }
-assert.ok(!scan.error, `Gitleaks failed to run: ${scan.error?.message ?? ''}`);
-throw new Error(scan.stderr || 'Gitleaks exited with an unexpected status');
+throw new Error('Gitleaks credential scan failed to complete');
